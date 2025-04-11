@@ -1,0 +1,139 @@
+categories:
+  LAG:
+    name: Storage
+    types:
+      HOF: Courtyard
+      GART: Garden
+      WERK: Workshop
+      KELL: Basement
+      TREP: Stairwell
+      BAD: Bathroom
+      GARD: Garden
+      GARA: Garage
+      BURO: Office
+      WOHN: Living Room
+      ESSZ: Dining Room
+      KUCH: Kitchen
+      LOGG: Loggia
+      SCHO: Shed
+      SPEI: Attic
+      GSTZ: Guest Room
+      SCHL: Bedroom
+      SCHR: Closet
+      REG: Shelf
+      EBE: Level
+      KIST: Box
+      FACH: Compartment
+
+  KAB:
+    name: Cable
+    types:
+      USB: USB
+      PWR: Power
+      NTZW: Network
+      TELE: DSL, ISDN, Telephone
+      VID: Video
+      PCI: Internal
+      AUD: Audio
+      BUS: Serial, Parallel
+      FIBR: Fiber Optic Cable
+      HF: High-Frequency Cable
+      ROH: Raw
+      STGS: Others
+
+  ELE:
+    name: Electronic Devices
+    types:
+      COMP: Computers & Laptops
+      CAM: Cameras
+      PERI: Peripherals (Mouse, Keyboard)
+      MNIT: Monitors
+      AUDI: Speakers, Amplifiers
+      MOB: Mobile & Tablets
+      FOTO: Camera / Photo
+      NETZ: Power Supplies
+      IOT: Smart Home
+      KUCH: Kitchen Appliances
+      REIN: Cleaning Devices
+      PRNT: Printers
+      TVAV: Television & Accessories
+      FERN: Remote Controls
+      STGS: Others
+
+  BTL:
+    name: Components
+    types:
+      DSPL: Display
+      ANT: Antenna
+      ENC: Housing
+      WDS: Resistors
+      KOND: Capacitors
+      INDU: Inductors
+      DIO: Diodes
+      TRAN: Transistors
+      MCU: Microcontrollers
+      ICC: IC Chips
+      BTN: Buttons
+      CONN: Connectors
+      SENA: Analog Sensors
+      SEND: Digital Sensors
+      ACTR: Actuators (Relays, Motors, Servos)
+      CLK: Clock Generators & Oscillators
+      FUSE: Fuses
+      PWRM: Voltage Regulators
+      PCB: Printed Circuit Boards
+      STGS: Other Components
+
+  VBM:
+    name: Consumables
+    types:
+      ESS: Food
+      LAMP: Lighting
+      MNT: Mounting
+      CHE: Chemicals
+      BAT: Batteries
+      STGS: Others
+
+  NET:
+    name: Network
+    types:
+      SWCH: Switch
+      ROUT: Router
+      WAP: WiFi AP
+      MIB: Middlebox
+      SRV: Server
+      RCK: Rack
+      PPNL: Patch Panel
+      SFP: SFP Module
+      STGS: Others
+
+  MED:
+    name: Storage Media
+    types:
+      SSD: SSD
+      HDD: HDD
+      USBS: USB
+      SDC: SD Cards
+      DVD: DVD
+      BLR: BlueRay
+      STGS: Others
+
+  DOK:
+    name: Documentation
+    types:
+      ANL: Manual
+      AMT: Office
+      VERS: Insurance
+      WIKI: Wiki
+      BAU: Construction
+      DBM: Database
+      ZUGD: Credentials
+      STGS: Others
+
+  TMP:
+    name: Temporary
+    types:
+      TEST: Test
+      GELI: Borrowed
+      IBA: In Progress
+      TMP: Temporary
