@@ -78,15 +78,13 @@ class TextElement(Element):
         return "\n".join(zpl_lines)
 
     def to_zpl(self, label: "Label", offset_x: int = 0, offset_y: int = 0) -> str:
-        """
-        Convert the text element to its corresponding ZPL code.
-
-        :param label: The parent label.
-        :param offset_x: Horizontal offset.
-        :param offset_y: Vertical offset.
-        :return: ZPL code as a string.
-        """
         measurer: ZPLElementMeasurer = label.measurer
+        # Falls der Text Sonderzeichen enthält, konvertiere ihn
+        if any(ch in self.text for ch in "ÜüÄäÖöß"):
+            converted_text = self._replace_special_chars(self.text)
+        else:
+            converted_text = self.text
+
         if "\n" in self.text:
             zpl_code = self._generate_multiline_zpl(label, offset_x, offset_y)
             logger.debug("Multiline TextElement ZPL: %s", zpl_code)
@@ -94,13 +92,41 @@ class TextElement(Element):
         else:
             final_x, final_y = self.x, self.y
             if self.center_horizontal or self.center_vertical:
-                width, height, _ = measurer.measure_zpl(f"^XA^FO0,0^A{self.font},{self.font_size}^FD{self.text}^FS^XZ")
+                width, height, _ = measurer.measure_zpl(f"^XA^FO0,0^A{self.font},{self.font_size}^FD{converted_text}^FS^XZ")
                 if self.center_horizontal:
                     final_x = int((label.width_px - width) / 2 + self.x)
                 if self.center_vertical:
                     final_y = int((label.height_px - height) / 2 + self.y)
             final_x = max(final_x + offset_x, 0)
             final_y = max(final_y + offset_y, 0)
-            zpl_code = f"^FO{final_x},{final_y}^A{self.font},{self.font_size}^FD{self.text}^FS"
+            zpl_code = f"^FO{final_x},{final_y}^A{self.font},{self.font_size}{converted_text}^FS"
             logger.debug("Single line TextElement ZPL: %s", zpl_code)
             return zpl_code
+
+
+    def _replace_special_chars(self, text: str) -> str:
+        """
+        Replace special German characters with ZPL hex escape sequences.
+        The escape character is defined by ^FH in ZPL.
+
+        Example mapping (je nach Drucker und Codepage kann die Zuordnung variieren):
+          Ü -> _DC, ü -> _dc
+          Ä -> _C4, ä -> _c4
+          Ö -> _D6, ö -> _d6
+          ß -> _E1
+        """
+        mapping = {
+            'Ü': '_DC',
+            'ü': '_dc',
+            'Ä': '_C4',
+            'ä': '_c4',
+            'Ö': '_D6',
+            'ö': '_d6',
+            'ß': '_E1'
+        }
+        # Ersetze Zeichen, die in mapping vorkommen
+        for char, hex_value in mapping.items():
+            text = text.replace(char, hex_value)
+        # Markiere, dass Escape-Sequenzen verwendet werden (erfordert in ZPL den Befehl ^FH)
+        return "^FH^FD" + text
+
