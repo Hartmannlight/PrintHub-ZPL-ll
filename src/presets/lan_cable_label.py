@@ -8,7 +8,6 @@ from src.elements.line_element import LineElement
 from src.config import DPI
 from src.utils.conversion import mm_to_pixels
 
-
 class LanCableLabel(BaseLabelPreset):
     """
     LAN Cable Label preset.
@@ -83,8 +82,9 @@ class LanCableLabel(BaseLabelPreset):
         grid_a0.set_cell_size(0, 0, width_mm=col_a0_width, height_mm=row_height_a)
         grid_a0.set_cell_size(1, 0, width_mm=col_a0_width, height_mm=row_height_a)
         grid_a0.cell(0, 0).add_element(TextElement(text="From:", center_horizontal=True, center_vertical=True))
-        grid_a0.cell(1, 0).add_element(DataMatrixElement(self.from_id, validate_existing=True,
-                                                          center_vertical=True, center_horizontal=True))
+        grid_a0.cell(1, 0).add_element(
+            DataMatrixElement.from_id(self.from_id, center_vertical=True, center_horizontal=True)
+        )
         grid_a.cell(0, 0).add_element(GridElement(grid_a0))
 
         # Row 1: from_location.
@@ -94,8 +94,9 @@ class LanCableLabel(BaseLabelPreset):
         # Row 3: from_port.
         grid_a.cell(0, 3).add_element(TextElement(text=self.from_port, center_horizontal=True, center_vertical=True))
         # Row 4: connection_id.
-        grid_a.cell(0, 4).add_element(DataMatrixElement(self.connection_id, validate_existing=True,
-                                                          center_vertical=True, center_horizontal=True))
+        grid_a.cell(0, 4).add_element(
+            DataMatrixElement.from_id(self.connection_id, center_vertical=True, center_horizontal=True)
+        )
 
         # Right section (To details)
         grid_c = GridLabel(
@@ -121,10 +122,10 @@ class LanCableLabel(BaseLabelPreset):
         grid_c0.set_cell_size(0, 0, width_mm=col_c0_width, height_mm=row_height_c)
         grid_c0.set_cell_size(1, 0, width_mm=col_c0_width, height_mm=row_height_c)
         grid_c0.cell(0, 0).add_element(TextElement(text="To:", center_horizontal=True, center_vertical=True))
-        grid_c0.cell(1, 0).add_element(DataMatrixElement(self.to_id, validate_existing=True,
-                                                          center_vertical=True, center_horizontal=True))
+        grid_c0.cell(1, 0).add_element(
+            DataMatrixElement.from_id(self.to_id, center_vertical=True, center_horizontal=True)
+        )
         grid_c.cell(0, 0).add_element(GridElement(grid_c0))
-
         # Row 1: to_location.
         grid_c.cell(0, 1).add_element(TextElement(text=self.to_location, center_horizontal=True, center_vertical=True))
         # Row 2: to_ip.
@@ -132,8 +133,9 @@ class LanCableLabel(BaseLabelPreset):
         # Row 3: to_port.
         grid_c.cell(0, 3).add_element(TextElement(text=self.to_port, center_horizontal=True, center_vertical=True))
         # Row 4: connection_id.
-        grid_c.cell(0, 4).add_element(DataMatrixElement(self.connection_id, validate_existing=True,
-                                                          center_vertical=True, center_horizontal=True))
+        grid_c.cell(0, 4).add_element(
+            DataMatrixElement.from_id(self.connection_id, center_vertical=True, center_horizontal=True)
+        )
 
         # Middle column (vertical divider)
         cell_width_b_px = mm_to_pixels(self.COL_B_WIDTH_MM, DPI)

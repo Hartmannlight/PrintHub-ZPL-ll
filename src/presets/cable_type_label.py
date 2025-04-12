@@ -7,7 +7,7 @@ from src.elements.line_element import LineElement
 from src.config import DPI
 from src.utils.conversion import mm_to_pixels
 from src.presets.base import BaseLabelPreset
-
+from src.utils.id_factory import IdFactory
 
 class CableTypeLabel(BaseLabelPreset):
     """
@@ -35,7 +35,7 @@ class CableTypeLabel(BaseLabelPreset):
         :param to_text: Text for the "to" section.
         :param length: Cable length.
         :param spec_text: Specification text.
-        :param type_abbr: Type abbreviation for the code (the category is fixed as "KAT").
+        :param type_abbr: Cable type abbreviation.
         """
         self.label_width_mm = label_width_mm
         self.label_height_mm = label_height_mm
@@ -101,7 +101,12 @@ class CableTypeLabel(BaseLabelPreset):
         grid_c.set_cell_size(0, 0, width_mm=col_a_width_mm, height_mm=top_height_c_mm)
         grid_c.set_cell_size(0, 1, width_mm=col_a_width_mm, height_mm=bottom_height_c_mm)
         grid_c.cell(0, 0).add_element(TextElement(text=self.spec_text, center_horizontal=True, center_vertical=True))
-        grid_c.cell(0, 1).add_element(DataMatrixElement.from_text("", category="KAT", type_abbr=self.type_abbr))
+        # Erzeuge eine gültige ID über den IdFactory und verwende from_id
+        id_factory = IdFactory()
+        generated_id = id_factory.generate_code("KAB", self.type_abbr)
+        grid_c.cell(0, 1).add_element(
+            DataMatrixElement.from_id(generated_id, module_ratio=3, center_horizontal=True, center_vertical=True)
+        )
         grid_c_element = GridElement(grid_c)
 
         main_grid.cell(0, 0).add_element(grid_a_element)
