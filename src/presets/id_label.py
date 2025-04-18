@@ -1,7 +1,7 @@
 # src/presets/id_label.py
 import logging
 from typing import Optional
-from src.presets.base import BaseLabelPreset
+from src.presets.base_label import BaseLabelPreset
 from src.label import Label
 from src.elements.text_element import TextElement
 from src.utils.label_helpers import make_datamatrix

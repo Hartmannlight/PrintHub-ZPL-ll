@@ -1,7 +1,7 @@
 # src/presets/pcb_label.py
 import logging
 from datetime import datetime
-from src.presets.base import BaseLabelPreset
+from src.presets.base_label import BaseLabelPreset
 from src.grids.grid_label import GridLabel
 from src.grids.grid_element import GridElement
 from src.elements.text_element import TextElement

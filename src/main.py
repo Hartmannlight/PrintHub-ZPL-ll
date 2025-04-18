@@ -12,18 +12,17 @@ from src.presets.cable_usage_label import CableUsageLabel
 from src.presets.container_label import ContainerLabel
 from src.presets.food_label import FoodLabel
 from src.presets.id_label import IdLabel
+from src.presets.image_label import ImageLabel
 from src.presets.lan_cable_label import LanCableLabel
 from src.presets.micro_controller_label import MicroControllerLabel
 from src.presets.network_device_label import NetworkDeviceLabel
 from src.presets.pcb_label import PcbLabel
 from src.presets.power_supply_label import PowerSupplyLabel
-from src.presets.qr import QRLabel
+from src.presets.qr_label import QRLabel
 from src.presets.storage_device_label import StorageDeviceLabel
-from src.presets.text import TextLabel
+from src.presets.text_label import TextLabel
 from src.presets.text_header_label import TextHeaderLabel
-from src.presets import image
 from src.utils.id_factory import IdFactory
-from src.label import Label
 from src.config import COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT
 from src.utils.labelary_client import LabelaryClient
 
@@ -53,7 +52,7 @@ def test_text_label() -> None:
         print("Error testing TextLabel:", e)
 
 
-def test_qr_label() -> None:
+def test_qr_label_default() -> None:
     try:
         preset = QRLabel(
             data="https://example.com",
@@ -62,11 +61,75 @@ def test_qr_label() -> None:
             label_height_mm=COMMON_LABEL_HEIGHT
         )
         zpl = preset.create_zpl()
-        print("QRLabel ZPL:")
+        print("Default QRLabel ZPL:")
         print(zpl)
-        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel")
+        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel-Default")
     except Exception as e:
-        print("Error testing QRLabel:", e)
+        print("Error testing QRLabel (default):", e)
+
+def test_qr_label_large() -> None:
+    try:
+        preset = QRLabel(
+            data="https://example.org",
+            qr_magnification=8,
+            label_width_mm=COMMON_LABEL_WIDTH,
+            label_height_mm=COMMON_LABEL_HEIGHT
+        )
+        zpl = preset.create_zpl()
+        print("Large QRLabel ZPL:")
+        print(zpl)
+        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel-Large")
+    except Exception as e:
+        print("Error testing QRLabel (large):", e)
+
+def test_qr_right_only() -> None:
+    try:
+        preset = QRLabel(
+            data="https://right.example",
+            qr_magnification=5,
+            label_width_mm=COMMON_LABEL_WIDTH,
+            label_height_mm=COMMON_LABEL_HEIGHT,
+            right_text="Info"
+        )
+        zpl = preset.create_zpl()
+        print("Right‑text QRLabel ZPL:")
+        print(zpl)
+        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel-Right")
+    except Exception as e:
+        print("Error testing QRLabel (right only):", e)
+
+def test_qr_bottom_only() -> None:
+    try:
+        preset = QRLabel(
+            data="https://bottom.example",
+            qr_magnification=5,
+            label_width_mm=COMMON_LABEL_WIDTH,
+            label_height_mm=COMMON_LABEL_HEIGHT,
+            bottom_text="Scan me!"
+        )
+        zpl = preset.create_zpl()
+        print("Bottom‑text QRLabel ZPL:")
+        print(zpl)
+        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel-Bottom")
+    except Exception as e:
+        print("Error testing QRLabel (bottom only):", e)
+
+def test_qr_both() -> None:
+    try:
+        preset = QRLabel(
+            data="https://both.example",
+            qr_magnification=5,
+            label_width_mm=COMMON_LABEL_WIDTH,
+            label_height_mm=COMMON_LABEL_HEIGHT,
+            right_text="More",
+            bottom_text="Scan below"
+        )
+        zpl = preset.create_zpl()
+        print("Both‑text QRLabel ZPL:")
+        print(zpl)
+        display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "QRLabel-Both")
+    except Exception as e:
+        print("Error testing QRLabel (both):", e)
 
 
 def test_cable_type_label() -> None:
@@ -308,8 +371,8 @@ def test_text_header_label() -> None:
 def test_image_label() -> None:
     try:
         file_path = os.path.join(os.path.dirname(__file__), "../img.jpg")
-        label_obj: Label = image.create(file_path, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT)
-        zpl = label_obj.zpl
+        preset = ImageLabel(file_path, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT)
+        zpl = preset.create_zpl()
         print("ImageLabel ZPL:")
         print(zpl)
         display_label(zpl, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT, "ImageLabel")
@@ -318,20 +381,24 @@ def test_image_label() -> None:
 
 
 def main() -> None:
+    test_qr_label_default()
+    test_qr_label_large()
+    test_qr_right_only()
+    test_qr_bottom_only()
+    test_qr_both()
     #test_text_label()
-    test_qr_label()
-    test_cable_type_label()
-    test_cable_usage_label()
-    test_food_label()
-    test_storage_device_label()
-    test_pcb_label()
-    test_power_supply_label()
-    test_container_label()
-    test_id_label()
-    test_lan_cable_label()
-    test_micro_controller_label()
-    test_network_device_label()
-    test_text_header_label()
+    #test_cable_type_label()
+    #test_cable_usage_label()
+    #test_food_label()
+    #test_storage_device_label()
+    #test_pcb_label()
+    #test_power_supply_label()
+    #test_container_label()
+    #test_id_label()
+    #test_lan_cable_label()
+    #test_micro_controller_label()
+    #test_network_device_label()
+    #test_text_header_label()
     test_image_label()
 
 

@@ -1,6 +1,6 @@
 # src/presets/micro_controller_label.py
 import logging
-from src.presets.base import BaseLabelPreset
+from src.presets.base_label import BaseLabelPreset
 from src.grids.grid_label import GridLabel
 from src.grids.grid_element import GridElement
 from src.utils.label_helpers import make_datamatrix

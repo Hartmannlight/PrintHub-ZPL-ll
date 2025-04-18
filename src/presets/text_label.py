@@ -1,6 +1,6 @@
 # src/presets/text.py
 import logging
-from src.presets.base import BaseLabelPreset
+from src.presets.base_label import BaseLabelPreset
 from src.elements.text_element import TextElement
 from src.label import Label
 from src.config import DEFAULT_FONT, DEFAULT_FONT_SIZE

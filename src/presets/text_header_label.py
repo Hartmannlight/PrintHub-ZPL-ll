@@ -1,6 +1,6 @@
 # src/presets/text_header_label.py
 import logging
-from src.presets.base import BaseLabelPreset
+from src.presets.base_label import BaseLabelPreset
 from src.utils.zpl_element_measurer import ZPLElementMeasurer
 from src.utils.conversion import mm_to_pixels
 from src.config import DPI, DEFAULT_FONT
