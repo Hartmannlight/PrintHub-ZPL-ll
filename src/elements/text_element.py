@@ -99,7 +99,7 @@ class TextElement(Element):
                     final_y = int((label.height_px - height) / 2 + self.y)
             final_x = max(final_x + offset_x, 0)
             final_y = max(final_y + offset_y, 0)
-            zpl_code = f"^FO{final_x},{final_y}^A{self.font},{self.font_size}{converted_text}^FS"
+            zpl_code = f"^FO{final_x},{final_y}^A{self.font},{self.font_size}^FD{converted_text}^FS"
             logger.debug("Single line TextElement ZPL: %s", zpl_code)
             return zpl_code
 
