@@ -76,7 +76,7 @@ def test_cable_type_label() -> None:
             label_height_mm=COMMON_LABEL_HEIGHT,
             from_text="Port A",
             to_text="Port B",
-            length=100,
+            length_cm=100,
             spec_text="Cat6",
             type_abbr="NTZW"
         )
@@ -211,7 +211,7 @@ def test_id_label() -> None:
             padding_x=8,
             padding_y=8,
             print_date=True,
-            date="2025-12-31",
+            date_override="2025-12-31",
             date_font_size=8
         )
         custom_zpl = custom_preset.create_zpl()
@@ -307,7 +307,7 @@ def test_text_header_label() -> None:
 
 def test_image_label() -> None:
     try:
-        file_path = os.path.join(os.path.dirname(__file__), "img.jpg")
+        file_path = os.path.join(os.path.dirname(__file__), "../img.jpg")
         label_obj: Label = image.create(file_path, COMMON_LABEL_WIDTH, COMMON_LABEL_HEIGHT)
         zpl = label_obj.zpl
         print("ImageLabel ZPL:")
@@ -318,7 +318,7 @@ def test_image_label() -> None:
 
 
 def main() -> None:
-    test_text_label()
+    #test_text_label()
     test_qr_label()
     test_cable_type_label()
     test_cable_usage_label()

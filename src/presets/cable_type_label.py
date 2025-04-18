@@ -1,116 +1,113 @@
-import datetime
+# src/presets/cable_type_label.py
+import logging
+from src.presets.base import BaseLabelPreset
 from src.grids.grid_label import GridLabel
 from src.grids.grid_element import GridElement
 from src.elements.text_element import TextElement
-from src.elements.data_matrix_element import DataMatrixElement
 from src.elements.line_element import LineElement
-from src.config import DPI
 from src.utils.conversion import mm_to_pixels
-from src.presets.base import BaseLabelPreset
-from src.utils.id_factory import IdFactory
+from src.utils.label_helpers import make_datamatrix
+
+logger = logging.getLogger(__name__)
+
 
 class CableTypeLabel(BaseLabelPreset):
     """
-    Cable Type Label preset.
-
-    This preset creates a label using a nested grid layout with sections for the "from" text,
-    "to" text, cable length, specification, and a generated ID.
+    Preset for cable type labels:
+      - Left block: From, To, Length
+      - Center: dividing line
+      - Right block: Spec text + DataMatrix code
     """
-    COL_B_WIDTH_MM = 20
-    NUM_COLS_MAIN = 3
-    NUM_ROWS_GRID_A = 3
-    NUM_ROWS_GRID_C = 2
-    LINE_THICKNESS = 2
-    C_TOP_RATIO = 2 / 3
-    DEFAULT_DRAW_GRID_LINES = True
 
-    def __init__(self, label_width_mm: float, label_height_mm: float, from_text: str, to_text: str,
-                 length: float, spec_text: str, type_abbr: str):
-        """
-        Initialize a CableTypeLabel.
+    COL_B_WIDTH_MM: float = 20.0
+    LINE_THICKNESS: int = 2
+    DRAW_GRID_LINES: bool = True
 
-        :param label_width_mm: Label width in mm.
-        :param label_height_mm: Label height in mm.
-        :param from_text: Text for the "from" section.
-        :param to_text: Text for the "to" section.
-        :param length: Cable length.
-        :param spec_text: Specification text.
-        :param type_abbr: Cable type abbreviation.
+    def __init__(
+        self,
+        label_width_mm: float,
+        label_height_mm: float,
+        from_text: str,
+        to_text: str,
+        length_cm: float,
+        spec_text: str,
+        type_abbr: str,
+    ) -> None:
         """
+        :param label_width_mm: Label width in mm (>0)
+        :param label_height_mm: Label height in mm (>0)
+        :param from_text: Text for the "from" field
+        :param to_text: Text for the "to" field
+        :param length_cm: Cable length in cm
+        :param spec_text: Specification text
+        :param type_abbr: Cable type abbreviation (e.g. 'NTZW')
+        :raises ValueError: If dimensions are not positive
+        """
+        logger.debug(
+            "Initializing CableTypeLabel(width=%.1f, height=%.1f, type=%s)",
+            label_width_mm, label_height_mm, type_abbr,
+        )
+        if label_width_mm <= 0 or label_height_mm <= 0:
+            raise ValueError("Label dimensions must be positive")
         self.label_width_mm = label_width_mm
         self.label_height_mm = label_height_mm
         self.from_text = from_text
         self.to_text = to_text
-        self.length = length
+        self.length_cm = length_cm
         self.spec_text = spec_text
         self.type_abbr = type_abbr
 
     def create_zpl(self) -> str:
         """
-        Generate ZPL code for the cable type label.
+        Build and return the ZPL for this cable-type label.
 
         :return: ZPL code as a string.
         """
-        col_a_width_mm = (self.label_width_mm - self.__class__.COL_B_WIDTH_MM) / 2
-        col_b_width_mm = self.__class__.COL_B_WIDTH_MM
+        logger.debug("Starting create_zpl for CableTypeLabel")
 
-        # Main grid: 3 columns x 1 row.
+        # Compute column widths
+        col_a = (self.label_width_mm - self.COL_B_WIDTH_MM) / 2
+        col_b = self.COL_B_WIDTH_MM
+        col_c = col_a
+
+        # Main grid (3 cols × 1 row)
         main_grid = GridLabel(
             real_width_mm=self.label_width_mm,
             real_height_mm=self.label_height_mm,
-            cols=self.__class__.NUM_COLS_MAIN,
+            cols=3,
             rows=1,
-            draw_grid_lines=self.__class__.DEFAULT_DRAW_GRID_LINES
+            draw_grid_lines=self.DRAW_GRID_LINES,
         )
-        main_grid.set_cell_size(0, 0, width_mm=col_a_width_mm, height_mm=self.label_height_mm)
-        main_grid.set_cell_size(1, 0, width_mm=col_b_width_mm, height_mm=self.label_height_mm)
-        main_grid.set_cell_size(2, 0, width_mm=col_a_width_mm, height_mm=self.label_height_mm)
+        main_grid.set_cell_size(0, 0, width_mm=col_a, height_mm=self.label_height_mm)
+        main_grid.set_cell_size(1, 0, width_mm=col_b, height_mm=self.label_height_mm)
+        main_grid.set_cell_size(2, 0, width_mm=col_c, height_mm=self.label_height_mm)
 
-        # Nested grid for column A ("from", "to", length).
-        grid_a = GridLabel(
-            real_width_mm=col_a_width_mm,
-            real_height_mm=self.label_height_mm,
-            cols=1,
-            rows=self.__class__.NUM_ROWS_GRID_A,
-            draw_grid_lines=self.__class__.DEFAULT_DRAW_GRID_LINES
-        )
-        cell_height_a_mm = self.label_height_mm / self.__class__.NUM_ROWS_GRID_A
-        for row in range(self.__class__.NUM_ROWS_GRID_A):
-            grid_a.set_cell_size(0, row, width_mm=col_a_width_mm, height_mm=cell_height_a_mm)
+        # Column A: nested grid 1×3 for From/To/Length
+        grid_a = GridLabel(real_width_mm=col_a, real_height_mm=self.label_height_mm, cols=1, rows=3, draw_grid_lines=self.DRAW_GRID_LINES)
+        row_h = self.label_height_mm / 3
+        for row in range(3):
+            grid_a.set_cell_size(0, row, width_mm=col_a, height_mm=row_h)
         grid_a.cell(0, 0).add_element(TextElement(text=self.from_text, center_horizontal=True, center_vertical=True))
         grid_a.cell(0, 1).add_element(TextElement(text=self.to_text, center_horizontal=True, center_vertical=True))
-        grid_a.cell(0, 2).add_element(TextElement(text=f"{self.length} cm", center_horizontal=True, center_vertical=True))
-        grid_a_element = GridElement(grid_a)
+        grid_a.cell(0, 2).add_element(TextElement(text=f"{self.length_cm} cm", center_horizontal=True, center_vertical=True))
+        main_grid.cell(0, 0).add_element(GridElement(grid_a))
 
-        # Vertical line for column B.
-        cell_width_b_px = mm_to_pixels(self.__class__.COL_B_WIDTH_MM, DPI)
-        cell_height_b_px = mm_to_pixels(self.label_height_mm, DPI)
-        center_x = cell_width_b_px // 2
-        line_element = LineElement(x1=center_x, y1=0, x2=center_x, y2=cell_height_b_px, thickness=self.__class__.LINE_THICKNESS)
+        # Column B: vertical line
+        px_b = mm_to_pixels(col_b)
+        px_h = mm_to_pixels(self.label_height_mm)
+        center_x = px_b // 2
+        main_grid.cell(1, 0).add_element(LineElement(x1=center_x, y1=0, x2=center_x, y2=px_h, thickness=self.LINE_THICKNESS))
 
-        # Nested grid for column C ("spec", generated ID).
-        grid_c = GridLabel(
-            real_width_mm=col_a_width_mm,
-            real_height_mm=self.label_height_mm,
-            cols=1,
-            rows=self.__class__.NUM_ROWS_GRID_C,
-            draw_grid_lines=self.__class__.DEFAULT_DRAW_GRID_LINES
-        )
-        top_height_c_mm = self.label_height_mm * self.__class__.C_TOP_RATIO
-        bottom_height_c_mm = self.label_height_mm * (1 - self.__class__.C_TOP_RATIO)
-        grid_c.set_cell_size(0, 0, width_mm=col_a_width_mm, height_mm=top_height_c_mm)
-        grid_c.set_cell_size(0, 1, width_mm=col_a_width_mm, height_mm=bottom_height_c_mm)
+        # Column C: spec + DataMatrix
+        grid_c = GridLabel(real_width_mm=col_c, real_height_mm=self.label_height_mm, cols=1, rows=2, draw_grid_lines=self.DRAW_GRID_LINES)
+        top_h = self.label_height_mm * 2 / 3
+        bot_h = self.label_height_mm - top_h
+        grid_c.set_cell_size(0, 0, width_mm=col_c, height_mm=top_h)
+        grid_c.set_cell_size(0, 1, width_mm=col_c, height_mm=bot_h)
         grid_c.cell(0, 0).add_element(TextElement(text=self.spec_text, center_horizontal=True, center_vertical=True))
-        # Erzeuge eine gültige ID über den IdFactory und verwende from_id
-        id_factory = IdFactory()
-        generated_id = id_factory.generate_code("KAB", self.type_abbr)
-        grid_c.cell(0, 1).add_element(
-            DataMatrixElement.from_id(generated_id, module_ratio=3, center_horizontal=True, center_vertical=True)
-        )
-        grid_c_element = GridElement(grid_c)
+        grid_c.cell(0, 1).add_element(make_datamatrix("KAB", self.type_abbr, module_ratio=3))
+        main_grid.cell(2, 0).add_element(GridElement(grid_c))
 
-        main_grid.cell(0, 0).add_element(grid_a_element)
-        main_grid.cell(1, 0).add_element(line_element)
-        main_grid.cell(2, 0).add_element(grid_c_element)
-
-        return main_grid.create()
+        zpl = main_grid.create()
+        logger.debug("Generated ZPL length=%d", len(zpl))
+        return zpl
