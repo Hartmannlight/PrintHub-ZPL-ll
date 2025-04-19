@@ -46,7 +46,12 @@ class Label:
         :return: A string containing the complete ZPL code.
         """
         logger.debug("Rendering label with %d element(s).", len(self.elements))
-        zpl_parts = ["^XA"]
+        zpl_parts = [
+            "^XA",
+            "^CI28",
+            f"^PW{self.width_px}",
+            f"^LL{self.height_px}"
+        ]
         for element in self.elements:
             element_zpl = element.to_zpl(self, offset_x=self.offset_x, offset_y=self.offset_y)
             logger.debug("Rendered element to ZPL: %s", element_zpl)

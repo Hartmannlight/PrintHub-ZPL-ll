@@ -13,10 +13,11 @@ class TextLabel(BaseLabelPreset):
     Preset for simple text labels: centers the provided content.
     """
 
-    def __init__(self, content: str, font: str = DEFAULT_FONT, label_width_mm: float = 70, label_height_mm: float = 100) -> None:
+    def __init__(self, content: str, font: str = DEFAULT_FONT, font_size: int = DEFAULT_FONT_SIZE, label_width_mm: float = 70, label_height_mm: float = 100) -> None:
         """
         :param content: Text content
         :param font: Font identifier
+        :param font_size: Font size
         :param label_width_mm: width in mm (>0)
         :param label_height_mm: height in mm (>0)
         :raises ValueError: If dimensions are not positive
@@ -26,6 +27,7 @@ class TextLabel(BaseLabelPreset):
             raise ValueError("Label dimensions must be positive")
         self.content = content
         self.font = font
+        self.font_size = font_size
         self.label_width_mm = label_width_mm
         self.label_height_mm = label_height_mm
 
@@ -36,5 +38,5 @@ class TextLabel(BaseLabelPreset):
         :return: ZPL code as a string.
         """
         logger.debug("Starting create_zpl for TextLabel")
-        elem = TextElement(text=self.content, font=self.font, font_size=DEFAULT_FONT_SIZE, center_horizontal=True, center_vertical=True)
+        elem = TextElement(text=self.content, font=self.font, font_size=self.font_size, center_horizontal=True, center_vertical=True)
         return Label(elem, width_mm=self.label_width_mm, height_mm=self.label_height_mm).zpl

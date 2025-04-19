@@ -79,11 +79,7 @@ class TextElement(Element):
 
     def to_zpl(self, label: "Label", offset_x: int = 0, offset_y: int = 0) -> str:
         measurer: ZPLElementMeasurer = label.measurer
-        # Falls der Text Sonderzeichen enthält, konvertiere ihn
-        if any(ch in self.text for ch in "ÜüÄäÖöß"):
-            converted_text = self._replace_special_chars(self.text)
-        else:
-            converted_text = self.text
+        converted_text = self.text
 
         if "\n" in self.text:
             zpl_code = self._generate_multiline_zpl(label, offset_x, offset_y)
@@ -102,31 +98,3 @@ class TextElement(Element):
             zpl_code = f"^FO{final_x},{final_y}^A{self.font},{self.font_size}^FD{converted_text}^FS"
             logger.debug("Single line TextElement ZPL: %s", zpl_code)
             return zpl_code
-
-
-    def _replace_special_chars(self, text: str) -> str:
-        """
-        Replace special German characters with ZPL hex escape sequences.
-        The escape character is defined by ^FH in ZPL.
-
-        Example mapping (je nach Drucker und Codepage kann die Zuordnung variieren):
-          Ü -> _DC, ü -> _dc
-          Ä -> _C4, ä -> _c4
-          Ö -> _D6, ö -> _d6
-          ß -> _E1
-        """
-        mapping = {
-            'Ü': '_DC',
-            'ü': '_dc',
-            'Ä': '_C4',
-            'ä': '_c4',
-            'Ö': '_D6',
-            'ö': '_d6',
-            'ß': '_E1'
-        }
-        # Ersetze Zeichen, die in mapping vorkommen
-        for char, hex_value in mapping.items():
-            text = text.replace(char, hex_value)
-        # Markiere, dass Escape-Sequenzen verwendet werden (erfordert in ZPL den Befehl ^FH)
-        return "^FH^FD" + text
-
