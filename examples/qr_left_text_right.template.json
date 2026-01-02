@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "name": "qr_left_text_right",
+  "defaults": {
+    "leaf_padding_mm": [
+      1.5,
+      1.5,
+      1.5,
+      1.5
+    ],
+    "text": {
+      "font_height_mm": 4.0,
+      "wrap": "word",
+      "fit": "shrink_to_fit",
+      "max_lines": 6,
+      "align_h": "left",
+      "align_v": "top"
+    },
+    "code2d": {
+      "quiet_zone_mm": 1.0
+    },
+    "render": {
+      "missing_variables": "error",
+      "emit_ci28": true
+    }
+  },
+  "layout": {
+    "kind": "split",
+    "direction": "v",
+    "ratio": 0.3,
+    "gutter_mm": 1.0,
+    "divider": {
+      "visible": true,
+      "thickness_mm": 0.3
+    },
+    "children": [
+      {
+        "kind": "leaf",
+        "alias": "code",
+        "debug_border": true,
+        "elements": [
+          {
+            "type": "qr",
+            "data": "{asset_id}",
+            "error_correction": "M",
+            "magnification": 3
+          }
+        ]
+      },
+      {
+        "kind": "leaf",
+        "alias": "text",
+        "debug_border": true,
+        "elements": [
+          {
+            "type": "text",
+            "text": "{title}\\n{subtitle}",
+            "align_h": "left",
+            "align_v": "center",
+            "max_lines": 6
+          }
+        ]
+      }
+    ]
+  }
+}
