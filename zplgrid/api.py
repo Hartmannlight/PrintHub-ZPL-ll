@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -44,6 +45,17 @@ class RenderResponse(BaseModel):
 load_dotenv()
 
 app = FastAPI(title="zplgrid API", version="1.0")
+
+_cors_origins_raw = os.getenv('ZPLGRID_CORS_ORIGINS', '')
+_cors_origins = [origin.strip() for origin in _cors_origins_raw.split(',') if origin.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 class PrintersConfigResponse(BaseModel):
