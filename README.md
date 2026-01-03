@@ -1,28 +1,17 @@
 # zplgrid (v1)
 
-`zplgrid` compiles a layout tree (split panes with relative ratios) into ZPL II for arbitrary label sizes.
+zplgrid compiles JSON layout templates into ZPL II. The repo also ships a small FastAPI
+service that renders, previews, and prints labels, plus endpoints to store templates and
+print drafts. This README is written for frontend developers who need enough context to
+build a UI on top of the API.
 
-Design goals:
-- The template defines structure and relative geometry, not printer dots.
-- Padding / thickness / gutters are always expressed in **mm**.
-- Stable node identity: paths like `r/0/1/0` (ratio changes do not change identity).
+## Project structure
 
-## What v1 supports
-
-- Split nodes: vertical (`v`) and horizontal (`h`) with `ratio` + `gutter_mm` and an optional visible divider line.
-- Leaf nodes: exactly **one** element per leaf.
-- Elements:
-  - `text` (with wrap via `^FB`, and optional `shrink_to_fit` heuristic)
-  - `qr` (ZPL `^BQN`)
-  - `datamatrix` (ZPL `^BX`)
-  - `line` (drawn via `^GB`)
-- Debug borders for leaves and split dividers.
-
-## Files
-
-- `zplgrid/schemas/zplgrid_template_v1.schema.json`: JSON Schema (draft 2020-12).
-- `zplgrid/`: library code.
-- `examples/`: example template + compilation script.
+- `zplgrid/`: core compiler and FastAPI app
+- `zplgrid/schemas/`: JSON schemas (template v1, printers v1)
+- `examples/`: sample template and compilation script
+- `configs/`: printers.yml (runtime printer config)
+- `templates/` and `drafts/`: persisted templates and drafts (created at runtime)
 
 ## Quick start
 
@@ -30,23 +19,148 @@ Design goals:
 python examples/compile_example.py
 ```
 
-The example writes `out.zpl`.
+This writes `examples/out.zpl`.
 
-## API: Render ZPL via HTTP
-
-This repository includes a small FastAPI service that renders ZPL II from a template JSON payload.
-
-### Run the server
+Start the API:
 
 ```bash
 poetry run uvicorn zplgrid.api:app --reload
 ```
 
-The API listens at `http://127.0.0.1:8000` by default.
+Base URL: `http://127.0.0.1:8000`
 
-### Endpoint
+## Mental model for the frontend
 
-`POST /v1/renders/zpl`
+### 1) Template JSON is a layout tree, not ZPL
+
+- The template defines relative geometry; ZPL is produced later.
+- All physical sizes are in millimeters.
+- Layout uses a binary split tree.
+
+### 2) Nodes
+
+- `split` node: divides a rectangle into two children.
+  - `direction`: "v" (left/right) or "h" (top/bottom)
+  - `ratio`: float between 0 and 1
+  - `gutter_mm`: gap between children
+  - `divider`: optional visible line inside the gutter
+- `leaf` node: terminal region with exactly one element in v1.
+  - `padding_mm`: [top, right, bottom, left] in mm
+  - `debug_border`: draw a border when debugging
+
+Canonical IDs (important for UI state):
+
+- Root is `r`.
+- Children are `r/0` and `r/1`, then `r/0/1`, etc.
+- IDs are derived from structure only; changing ratio does not change IDs.
+
+Optional aliases:
+
+- `alias` is a unique human-friendly name for a node.
+- Aliases are not used for identity.
+
+### 3) Elements (one per leaf)
+
+Common optional fields: `id`, `padding_mm`, `min_size_mm`, `max_size_mm`, `extensions`.
+
+- `text`:
+  - `text` supports `{placeholders}` and `\n`
+  - `font_height_mm`, `font_width_mm`
+  - `wrap`: none|word|char
+  - `fit`: overflow|wrap|shrink_to_fit|truncate
+  - `max_lines`, `align_h`, `align_v`
+- `qr`:
+  - `data` (supports placeholders)
+  - `magnification` (1..10), `size_mode` fixed|max
+  - `error_correction` L|M|Q|H
+  - `input_mode` A|M, `character_mode` required if input_mode is M
+  - `quiet_zone_mm`
+  - `render_mode`: zpl|image
+  - `theme` for image mode (preset/module_shape/finder_shape)
+- `datamatrix`:
+  - `data`, `module_size_mm`, `size_mode`
+  - `columns` and `rows` required for size_mode "max"
+  - `quiet_zone_mm`
+  - `render_mode`: zpl|image
+- `line`:
+  - `orientation`: h|v
+  - `thickness_mm`
+  - `align`: start|center|end
+- `image`:
+  - `source.kind`: base64|url
+  - `source.data`: raw base64 or URL (placeholders allowed)
+  - `fit`: none|contain|cover|stretch
+  - `align_h`, `align_v`, `input_dpi`, `threshold`, `dither`, `invert`
+  - URL sources require env `ZPLGRID_ENABLE_IMAGE_URL=1`.
+
+### 4) Defaults
+
+Top-level `defaults` reduce repetition:
+
+- `defaults.leaf_padding_mm`
+- `defaults.text` (same fields as text element)
+- `defaults.code2d` (quiet_zone_mm, size_mode, align_h, align_v, render_mode)
+- `defaults.image` (fit, align, input_dpi, threshold, dither, invert)
+- `defaults.render`:
+  - `missing_variables`: error|empty
+  - `emit_ci28`: enable UTF-8 in ZPL
+  - `debug_padding_guides`, `debug_gutter_guides`
+
+### 5) Variables and macros
+
+Placeholders use Python format syntax: `{name}`.
+
+- Escape literals with `{{` and `}}`.
+- API requests currently fail if any placeholder is missing, even if
+  `missing_variables` is "empty". Send all values or use macros.
+
+Built-in macros (only added if missing from `variables`):
+
+- `_now_iso`, `_date_yyyy_mm_dd`, `_date_dd_mm_yyyy`
+- `_time_hh_mm`, `_time_hh_mm_ss`, `_timestamp_ms`
+- `_uuid`, `_short_id`
+- `_draft_id`, `_printer_id`, `_template_name`
+- Counters (increment only on print via `/prints/template`):
+  - `_counter_global`, `_counter_daily`
+  - `_counter_printer`, `_counter_printer_daily`
+  - `_counter_template`, `_counter_template_daily`
+
+Timezone for macros can be set via `ZPLGRID_TIMEZONE`.
+
+### 6) Render target
+
+Every render needs a target label size and DPI:
+
+```json
+{ "width_mm": 74.0, "height_mm": 26.0, "dpi": 203, "origin_x_mm": 0.0, "origin_y_mm": 0.0 }
+```
+
+### 7) Validation rules to enforce in UI
+
+- `ratio` is 0 < ratio < 1.
+- `gutter_mm` must be >= `divider.thickness_mm` when divider is visible.
+- Exactly one element per leaf in v1.
+- Text: `wrap` and `fit` must be compatible (see schema).
+- DataMatrix size_mode "max" requires both `columns` and `rows`.
+- QR input_mode "M" requires `character_mode`.
+
+### 8) Known limitations (v1)
+
+- No rotation support.
+- No clipping of overflow.
+- One element per leaf.
+- DataMatrix auto-fit needs explicit columns and rows.
+- Text sizing is heuristic in shrink_to_fit.
+
+## API reference (frontend integration)
+
+All endpoints are JSON over HTTP. Errors use standard FastAPI format:
+`{ "detail": "..." }`.
+
+### Render
+
+- `POST /v1/renders/zpl` -> `{ "zpl": "^XA..." }`
+- `POST /v1/renders/png` -> `image/png` (requires `ZPLGRID_ENABLE_LABELARY_API=1`)
 
 Request body:
 
@@ -59,564 +173,71 @@ Request body:
 }
 ```
 
-Response:
+### Drafts (design -> operator handoff)
+
+- `POST /v1/drafts` -> `{ "draft_id": "...", "expires_at": "..." }`
+- `GET /v1/drafts/{draft_id}` -> full draft payload
+
+Drafts expire after `ZPLGRID_PRINT_DRAFT_TTL_MINUTES` (default 30). Storage dir:
+`drafts/` or `ZPLGRID_PRINT_DRAFTS_DIR`.
+
+### Templates library
+
+- `POST /v1/templates` -> saved template with id
+- `PUT /v1/templates/{template_id}` -> update
+- `GET /v1/templates` -> list
+- `GET /v1/templates/{template_id}` -> detail
+- `GET /v1/templates/{template_id}/preview` -> `image/png` (only if preview exists)
+
+`POST /v1/templates` body:
 
 ```json
 {
-  "zpl": "^XA..."
-}
-```
-
-### Errors
-
-- Missing variables or invalid templates return `400` with a short `detail` message.
-
-## API: Print drafts (Design -> Operator UI)
-
-The backend can store print drafts so the operator UI loads the payload by `draft_id`.
-
-### Endpoint
-
-`POST /v1/drafts`
-
-Request body:
-
-```json
-{
+  "name": "my_template",
+  "tags": ["shipping", "small"],
+  "variables": [{ "name": "asset_id", "label": "Asset ID" }],
   "template": { "...": "..." },
-  "variables": { "name": "Widget" },
-  "target": { "width_mm": 50, "height_mm": 24, "dpi": 203, "origin_x_mm": 0, "origin_y_mm": 0 },
-  "debug": false
+  "sample_data": { "asset_id": "ABC-123" },
+  "preview_target": { "width_mm": 50, "height_mm": 24, "dpi": 203, "origin_x_mm": 0, "origin_y_mm": 0 }
 }
 ```
 
-Response:
+Previews are generated only if `ZPLGRID_ENABLE_LABELARY_TEMPLATES=1`.
 
-```json
-{
-  "draft_id": "abcd1234",
-  "expires_at": "2025-01-01T12:00:00+00:00"
-}
-```
+Templates are stored under `templates/` (override with `ZPLGRID_TEMPLATES_DIR`).
 
-`GET /v1/drafts/{draft_id}`
+### Printing
 
-Response:
+- `POST /v1/printers/{printer_id}/prints/zpl`
+  - Body: `{ "zpl": "^XA...", "return_preview": false }`
+- `POST /v1/printers/{printer_id}/prints/template`
+  - Body: `{ "template": {...}, "variables": {...}, "debug": false, "target": {...}, "return_preview": false }`
+  - If `target` is omitted, the printer's loaded media size and alignment are used.
+- `GET /v1/printers` -> full config
+- `GET /v1/printers/{printer_id}`
+- `PUT /v1/printers/{printer_id}` -> upsert config
+- `GET /v1/printers/{printer_id}/status` -> raw + parsed + normalized status JSON
 
-```json
-{
-  "draft_id": "abcd1234",
-  "template": { "...": "..." },
-  "variables": { "name": "Widget" },
-  "target": { "width_mm": 50, "height_mm": 24, "dpi": 203, "origin_x_mm": 0, "origin_y_mm": 0 },
-  "debug": false,
-  "created_at": "2025-01-01T11:30:00+00:00",
-  "expires_at": "2025-01-01T12:00:00+00:00"
-}
-```
+Status response highlights:
 
-### Draft TTL
+- `raw`: raw text responses from `~HS`, `~HD`, `~HI`, `~HQES`
+- `parsed`: legacy parsing (lists and key/value maps)
+- `normalized.summary`: model/firmware/dpmm/memory plus `errors` and `warnings`
 
-- Drafts expire automatically (default 30 minutes).
-- Expired drafts are deleted and return `404`.
-- Override TTL with `ZPLGRID_PRINT_DRAFT_TTL_MINUTES` (integer minutes).
+`return_preview` requires `ZPLGRID_ENABLE_LABELARY_PREVIEW=1` and returns
+`preview_png_base64` in the response.
 
-## Important limitations (by design in v1)
+Printers are configured in `configs/printers.yml` (schema:
+`zplgrid/schemas/printers_v1.schema.json`).
 
-- No rotations.
-- No clipping (ZPL does not clip fields like CSS).
-- Text sizing is heuristic unless you add a better `TextMeasurer` later.
-- QR auto-fit is optional; DataMatrix auto-fit requires explicit `columns` and `rows`.
+### Common error cases
 
+- 400: template validation or render error
+- 403: Labelary endpoints disabled
+- 404: missing template, draft, or printer
+- 502: printer I/O or Labelary service failure
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# zplgrid v1 — Project Handover Spec (for the Web Template Builder (other project work in progress))
-
-This document describes the **template JSON format**, **design decisions**, **validation rules**, and the **mental model** needed to build a web UI that outputs correct JSON for the `zplgrid` compiler. The website’s only job is to produce valid JSON templates; the Python library will validate and compile the template into ZPL II.
-
----
-
-## 1) High-level purpose
-
-**Problem:** ZPL II is “absolute” (printer dots). The goal is to define templates that work across **many label sizes** without rewriting per format.
-
-**Solution:** A template is not “ZPL with placeholders”, but a **recursive split layout tree** (like split panes).
-
-* The tree is defined in **relative geometry** (ratios).
-* Physical values (padding, line thickness, gutter, module size, etc.) are always in **millimeters**.
-* At compile time, the library converts everything to printer dots using the chosen label size and DPI, resolves the layout, then emits ZPL.
-
----
-
-## 2) Core layout model
-
-### 2.1 Node types
-
-The `layout` field is a tree of nodes. Each node is either:
-
-* **split node**: divides a region into two child regions.
-* **leaf node**: terminal region containing exactly **one element** in v1.
-
-### 2.2 Deterministic node identity (critical for the UI)
-
-The compiler uses **canonical node IDs** based on the path in the tree:
-
-* Root node ID is always: `r`
-* A split node has exactly 2 children, indexed:
-
-  * child 0 → node ID path suffix `/0`
-  * child 1 → node ID path suffix `/1`
-
-Examples:
-
-* Left child of root: `r/0`
-* Right child of root: `r/1`
-* Right child’s top child: `r/1/0`
-
-**Important:** These IDs are **not stored in JSON**; they are derived from the structure.
-
-**Design requirement met:** If you only change a split’s `ratio`, `gutter_mm`, or divider settings, the structure doesn’t change ⇒ the canonical IDs stay the same.
-
-**When IDs change:** If you insert/remove nodes (structure change), paths shift. That is considered a “new template” and it’s acceptable.
-
-### 2.3 Aliases (human-friendly names)
-
-Nodes may include an optional `alias` string.
-
-* Alias must be unique across the entire tree.
-* Alias is purely for UI convenience (display/select), not identity.
-* Your website can let users label regions like `"left"`, `"code"`, `"text_top"`, etc.
-
----
-
-## 3) Split semantics (how geometry is computed)
-
-Split nodes define how to carve a parent rectangle into two child rectangles.
-
-### 3.1 Split direction
-
-* `direction: "v"` → vertical split (left/right)
-* `direction: "h"` → horizontal split (top/bottom)
-
-### 3.2 Split ratio
-
-* `ratio` is a float `0 < ratio < 1`
-* For `"v"`: child0 is left width = `ratio`, child1 is remainder
-* For `"h"`: child0 is top height = `ratio`, child1 is remainder
-
-### 3.3 Gutter and divider
-
-A split can have:
-
-* `gutter_mm`: spacing between child0 and child1 (mm)
-* `divider`: optional visible line with `thickness_mm` (mm)
-
-**Hard invariant (enforced by validation):**
-
-* If `divider.visible == true`, then `gutter_mm >= divider.thickness_mm`
-
-**Meaning:** The divider line is drawn **inside the gutter** (not over content). This avoids “divider cuts the QR/text” bugs.
-
-### 3.4 Deterministic rounding in dots
-
-At compile time, mm → dots yields integers. When splitting:
-
-* available = parent_length_dots − gutter_dots
-* child0 = floor(available * ratio)
-* child1 = available − child0
-
-This guarantees:
-
-* no missing pixels
-* `child0 + gutter + child1 == parent` always
-
----
-
-## 4) Leaf semantics
-
-A leaf node is a rectangle that can contain content.
-
-### 4.1 Leaf padding
-
-Leaf nodes may have:
-
-* `padding_mm: [top, right, bottom, left]` (all ≥ 0)
-
-If missing, leaf padding comes from top-level `defaults.leaf_padding_mm`.
-
-**After padding**, the remaining rectangle is the **content rect**. The element is placed into that.
-
-### 4.2 Exactly one element per leaf (v1)
-
-The JSON field is `elements: [ ... ]`, but validation requires:
-
-* `elements` must contain **exactly 1** element.
-
-**UI implication:** If the user wants multiple items in one area, they must create additional splits.
-
----
-
-## 5) Elements (v1)
-
-### Common element fields (shared across all types)
-
-Elements may include:
-
-* `id: string` (optional)
-
-  * purely for diagnostics (helpful for UI)
-* `padding_mm: [t,r,b,l]` (optional, mm)
-
-  * padding inside the leaf content rect
-* `min_size_mm: [w,h]` (optional, mm)
-
-  * if the computed box is smaller ⇒ compilation error
-* `max_size_mm: [w,h]` (optional, mm)
-
-  * if bigger ⇒ element box is reduced and centered
-* `extensions: object` (optional)
-
-  * arbitrary UI metadata (ignored by compiler)
-
-**Sizing rule (v1):**
-
-* element default box = “fill leaf content rect”
-* apply element padding
-* enforce min/max size if present (max shrinks and centers)
-
-### 5.1 Text element (`type: "text"`)
-
-Required:
-
-* `text: string`
-
-Optional settings:
-
-* `font_height_mm: number > 0`
-* `font_width_mm: number > 0` (defaults to `font_height_mm` if absent)
-* `wrap: "none" | "word" | "char"`
-* `fit: "overflow" | "wrap" | "shrink_to_fit" | "truncate"`
-* `max_lines: int >= 1`
-* `align_h: "left" | "center" | "right"`
-* `align_v: "top" | "center" | "bottom"`
-
-Defaults can be specified globally via `defaults.text` (details below).
-
-**Newlines in text:**
-
-* The compiler supports:
-
-  * actual newline characters
-  * literal `\n` sequences (two characters backslash+n)
-* The compiler converts them to ZPL newline control (`\&`) internally.
-
-**Important (ZPL reality):**
-
-* ZPL doesn’t “clip” like HTML. If you choose `fit="overflow"`, content may exceed the leaf.
-* `wrap` and `max_lines` are implemented via `^FB` in ZPL.
-* `shrink_to_fit` uses a **heuristic** text measurer (replaceable later). It repeatedly reduces font size until the estimated content fits (or hits 1 dot).
-
-**UI recommendation:**
-
-* Offer fit modes as an explicit dropdown.
-* If `align_v` is center/bottom, explain that vertical placement depends on estimated text height.
-
-### 5.2 QR element (`type: "qr"`)
-
-Required:
-
-* `data: string`
-
-Optional:
-
-* `magnification: int 1..10` (optional; if omitted compiler chooses a DPI-based default)
-* `size_mode: "fixed" | "max"` (default "fixed")
-* `align_h: "left" | "center" | "right"` (default "center")
-* `align_v: "top" | "center" | "bottom"` (default "center")
-* `error_correction: "L" | "M" | "Q" | "H"` (default "M")
-* `input_mode: "A" | "M"` (default "A")
-* `character_mode`: required for `input_mode="M"` ("N" numeric or "A" alphanumeric)
-* `quiet_zone_mm: number >= 0` (optional; can come from `defaults.code2d.quiet_zone_mm`)
-
-Note: QR model is fixed to 2 in this project.
-
-**Sizing behavior (v1):**
-
-* The element box is made square based on `min(w,h)` after quiet zone.
-* The QR is centered in the available inner square.
-* If `size_mode="max"`, the compiler picks the largest magnification that fits inside the inner square.
-
-**UI recommendation:**
-
-* Always expose `quiet_zone_mm` (or apply a sensible global default).
-* Provide magnification either:
-
-  * “Auto” (omit the field), or
-  * explicit numeric selection.
-
-### 5.3 DataMatrix element (`type: "datamatrix"`)
-
-Required:
-
-* `data: string`
-
-Optional:
-
-* `module_size_mm: number > 0` (default 0.5mm in compiler)
-* `size_mode: "fixed" | "max"` (default "fixed")
-* `align_h: "left" | "center" | "right"` (default "center")
-* `align_v: "top" | "center" | "bottom"` (default "center")
-* `quality: 200` (default 200; ECC200 only)
-* `columns: int 0..49` (default 0 = auto)
-* `rows: int 0..49` (default 0 = auto)
-* `format_id: int 0..6` (default 6)
-* `escape_char: single character string` (default "_")
-* `quiet_zone_mm: number >= 0` (optional; can come from `defaults.code2d.quiet_zone_mm`)
-
-**UI recommendation:**
-
-* Most users should only set `module_size_mm` + `quiet_zone_mm`.
-* Keep the advanced parameters behind an “advanced” toggle.
-
-### 5.4 Line element (`type: "line"`)
-
-Required:
-
-* `orientation: "h" | "v"`
-* `thickness_mm: number > 0`
-
-Optional:
-
-* `align: "start" | "center" | "end"` (default center)
-
-**Meaning:**
-
-* Horizontal line: spans the element’s width, thickness is the line’s height.
-* Vertical line: spans the element’s height, thickness is the line’s width.
-
----
-
-## 6) Global defaults (top-level `defaults`)
-
-Top-level `defaults` allows the template to define common behavior so the UI doesn’t have to repeat settings everywhere.
-
-### 6.1 `defaults.leaf_padding_mm`
-
-Applies to any leaf that does not specify its own `padding_mm`.
-
-### 6.2 `defaults.text`
-
-These values are merged into each text element (element fields override defaults):
-
-* `font_height_mm`
-* `font_width_mm`
-* `wrap`
-* `fit`
-* `max_lines`
-* `align_h`
-* `align_v`
-
-### 6.3 `defaults.code2d`
-
-Merged into both QR and DataMatrix elements:
-
-* `quiet_zone_mm`
-* `size_mode`
-* `align_h`
-* `align_v`
-
-### 6.4 `defaults.render`
-
-Controls rendering/encoding behaviors:
-
-* `missing_variables: "error" | "empty"`
-
-  * `"error"`: compilation fails if a `{placeholder}` is missing
-  * `"empty"`: missing placeholders become empty strings
-* `emit_ci28: boolean`
-
-  * If true, the compiler emits `^CI28` to enable UTF-8 text handling in ZPL output.
-  * Recommended if you expect umlauts or non-ASCII.
-
-**UI recommendation:**
-
-* Expose these in a “Template Settings” panel.
-* Default should be:
-
-  * `missing_variables = "error"`
-  * `emit_ci28 = true`
-
----
-
-## 7) Placeholders / variable binding
-
-Text and code data support Python-style format placeholders:
-
-* Example: `"data": "{asset_id}"`
-* Example: `"text": "Name: {name}\nID: {asset_id}"`
-
-At compile time, the library does `str.format_map(variables)`.
-
-**Rules for the UI:**
-
-* Placeholders are delimited by `{...}`.
-* If the user needs literal `{` or `}`, they must be escaped as `{{` and `}}` (Python format rules).
-* Missing variables behavior is controlled by `defaults.render.missing_variables`.
-
-**Editor UX suggestion:**
-
-* Provide a “Variables used in this template” view by parsing `{identifier}` occurrences.
-* Provide validation warnings if placeholders look malformed.
-
----
-
-## 8) JSON Schema and validation rules
-
-### 8.1 Schema location
-
-The schema shipped with the project:
-
-* `zplgrid/schemas/zplgrid_template_v1.schema.json` (used by Python validation)
-
-The Python library validates with `jsonschema` (Draft 2020-12) and then runs extra checks.
-
-### 8.2 Additional invariants enforced by the Python lib
-
-Even if the JSON “looks ok”, compilation can fail if:
-
-* divider is visible but `gutter_mm < thickness_mm`
-* leaf `elements` is not exactly length 1 (v1)
-* `min_size_mm` doesn’t fit the computed element box
-
-**UI implication:** you should proactively prevent these states, not just rely on backend errors.
-
----
-
-## 9) Versioning strategy (future-proofing)
-
-* The JSON has `schema_version: 1`.
-* For breaking changes (multiple elements per leaf, rotations, additional placement modes, etc.), introduce `schema_version: 2`, keep v1 parser for compatibility.
-
-**UI should:**
-
-* always emit `schema_version: 1` for now
-* keep unknown extra app fields inside `extensions` objects so old compilers ignore them safely
-
----
-
-## 10) Explicitly out-of-scope in v1 (so the UI must not promise it)
-
-* No rotation support.
-* No "true clipping" of overflow.
-* DataMatrix auto-fit requires explicit `columns` and `rows` to compute the module size.
-* No multi-element leaf layout/flow (stacking). Use splits instead.
-
----
-
-## 11) Recommended UI structure (practical guidance)
-
-### 11.1 Editor model
-
-Represent the template as:
-
-* a tree view (nodes)
-* plus a visual preview grid (optional, not required to be accurate in dots)
-
-Each node:
-
-* shows canonical node ID (computed), e.g. `r/1/0`
-* shows optional alias
-* shows node type: split or leaf
-
-### 11.2 Split node UI
-
-Controls:
-
-* direction toggle (vertical/horizontal)
-* ratio slider (0.01 … 0.99)
-* gutter_mm numeric input (≥ 0)
-* divider toggle
-* divider thickness_mm input (only enabled if divider visible)
-  Validation hints:
-* enforce `gutter_mm >= divider.thickness_mm` when divider visible
-
-### 11.3 Leaf node UI
-
-Controls:
-
-* padding_mm editor (4 numeric mm inputs)
-* debug_border toggle (optional)
-* element editor (exactly one element in v1)
-* optional alias
-
-### 11.4 Element editors
-
-Provide a type switch:
-
-* Text / QR / DataMatrix / Line
-
-For each element:
-
-* show optional element id (string)
-* show padding_mm
-* show min_size_mm / max_size_mm with warnings
-
-Text element controls:
-
-* text editor with placeholder help
-* wrap mode
-* fit mode
-* max lines
-* alignment (H/V)
-* font size in mm (height, optionally width)
-
-QR controls:
-
-* data template
-* ECC
-* magnification (Auto or 1..10)
-* size_mode ("fixed" or "max")
-* align_h / align_v
-* quiet zone mm (or inherit from defaults)
-
-DataMatrix controls:
-
-* data template
-* module_size_mm
-* size_mode ("fixed" or "max")
-* align_h / align_v
-* quiet zone mm
-* advanced: quality, columns/rows, format id
-
-Line controls:
-
-* orientation
-* thickness_mm
-* align start/center/end
-
-### 11.5 Defaults panel
-
-* leaf padding default
-* text defaults
-* code2d defaults
-* render defaults
-
----
-
-## 12) Minimal example template (what the UI should produce)
+## Example template (minimal)
 
 ```json
 {
@@ -666,25 +287,10 @@ Line controls:
 }
 ```
 
----
+## Frontend checklist
 
-## 13) What the website does NOT need to handle
-
-* DPI conversions or printer dots
-* ZPL command syntax
-* ZPL escaping rules
-* Layout rounding rules
-* Any compilation logic
-
-It only needs to:
-
-* build valid JSON according to the schema
-* enforce the extra invariants early (divider/gutter, 1 element per leaf, etc.)
-* optionally provide a preview (can be approximate)
-
----
-
-If you want, I can also provide:
-
-* a “UI-oriented” JSON schema subset (with descriptions/tooltips for each field), or
-* a typed TypeScript model that mirrors the schema (for React/Vue form generation).
+- Build a tree editor with split + leaf nodes and show canonical IDs.
+- Enforce schema constraints and invariants before sending to API.
+- Provide variable extraction from `{placeholders}` and a data entry form.
+- Use `/v1/renders/png` or `/v1/templates/.../preview` for previews (if enabled).
+- For operator UI, use drafts or templates plus `/prints/template`.

@@ -204,6 +204,7 @@ class PrinterStatusResponse(BaseModel):
     printer_id: str
     raw: dict[str, str]
     parsed: dict[str, Any]
+    normalized: dict[str, Any]
 
 
 class PrintDraftCreateRequest(BaseModel):
@@ -367,6 +368,105 @@ def _parse_host_inventory(raw: str) -> dict[str, str]:
     return info
 
 
+def _parse_int(value: str) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _split_status_list(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    parts = [part.strip() for part in value.replace(';', ',').split(',')]
+    return [part for part in parts if part and part.lower() not in ('none', 'n/a', 'na')]
+
+
+def _normalize_host_status(raw: str) -> dict[str, Any]:
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    normalized_lines: list[dict[str, Any]] = []
+    for line in lines:
+        fields = [field.strip() for field in line.split(',')]
+        field_entries: list[dict[str, Any]] = []
+        for idx, field in enumerate(fields):
+            entry: dict[str, Any] = {'index': idx, 'value': field}
+            value_int = _parse_int(field)
+            if value_int is not None:
+                entry['value_int'] = value_int
+            field_entries.append(entry)
+        normalized_lines.append(
+            {
+                'raw': line,
+                'fields': field_entries,
+                'field_count': len(fields),
+            }
+        )
+    return {'lines': normalized_lines}
+
+
+def _normalize_host_diagnostic(raw: str) -> dict[str, Any]:
+    parsed = _parse_host_diagnostic(raw)
+    entries = [{'key': key, 'value': value} for key, value in parsed.items()]
+    return {'map': parsed, 'entries': entries}
+
+
+def _normalize_host_identification(raw: str) -> dict[str, Any]:
+    parsed = _parse_host_identification(raw)
+    dpmm_raw = parsed.get('dpmm')
+    dpmm = _parse_int(dpmm_raw) if isinstance(dpmm_raw, str) else None
+    return {
+        'model': parsed.get('model'),
+        'firmware': parsed.get('firmware'),
+        'dpmm': dpmm,
+        'dpmm_raw': dpmm_raw,
+        'memory': parsed.get('memory'),
+    }
+
+
+def _normalize_host_inventory(raw: str) -> dict[str, Any]:
+    parsed = _parse_host_inventory(raw)
+    errors = _split_status_list(parsed.get('errors'))
+    warnings = _split_status_list(parsed.get('warnings'))
+    return {
+        'errors': errors,
+        'warnings': warnings,
+        'has_errors': bool(errors),
+        'has_warnings': bool(warnings),
+    }
+
+
+def _build_status_summary(normalized: Mapping[str, Any]) -> dict[str, Any]:
+    identification = normalized.get('host_identification') or {}
+    inventory = normalized.get('host_inventory') or {}
+    errors = list(inventory.get('errors') or [])
+    warnings = list(inventory.get('warnings') or [])
+    return {
+        'model': identification.get('model'),
+        'firmware': identification.get('firmware'),
+        'dpmm': identification.get('dpmm'),
+        'memory': identification.get('memory'),
+        'errors': errors,
+        'warnings': warnings,
+        'has_errors': bool(errors),
+        'has_warnings': bool(warnings),
+    }
+
+
+def _normalize_status_payload(raw_results: Mapping[str, str]) -> dict[str, Any]:
+    host_status_raw = raw_results.get('host_status', '')
+    host_diagnostic_raw = raw_results.get('host_diagnostic', '')
+    host_identification_raw = raw_results.get('host_identification', '')
+    host_inventory_raw = raw_results.get('host_inventory', '')
+    normalized = {
+        'host_status': _normalize_host_status(host_status_raw),
+        'host_diagnostic': _normalize_host_diagnostic(host_diagnostic_raw),
+        'host_identification': _normalize_host_identification(host_identification_raw),
+        'host_inventory': _normalize_host_inventory(host_inventory_raw),
+    }
+    normalized['summary'] = _build_status_summary(normalized)
+    return normalized
+
+
 @app.post("/v1/printers/{printer_id}/prints/zpl", response_model=PrintResponse)
 def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
     printer = _get_printer(printer_id)
@@ -522,7 +622,13 @@ def get_printer_status(printer_id: str) -> PrinterStatusResponse:
         elif key == 'host_inventory':
             parsed_results[key] = _parse_host_inventory(raw_text)
 
-    return PrinterStatusResponse(printer_id=printer_id, raw=raw_results, parsed=parsed_results)
+    normalized_results = _normalize_status_payload(raw_results)
+    return PrinterStatusResponse(
+        printer_id=printer_id,
+        raw=raw_results,
+        parsed=parsed_results,
+        normalized=normalized_results,
+    )
 
 
 @app.post("/v1/templates", response_model=TemplateDetailResponse)

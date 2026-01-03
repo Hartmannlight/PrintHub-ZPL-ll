@@ -1,42 +1,98 @@
-﻿config_version: 1
-
+config_version: 1
 printers:
-  - id: gastezimmer-labelprinter-thermopapier-giraffe-zpl
-    name: "Gästezimmer Giraffe"
-    model: LP 2824 Plus
-    vendor: Zebra
-    driver: zpl
-
-    connection:
-      protocol: raw9100
-      host: 192.168.0.101
-      port: 9100
-      timeout_ms: 3000
-
-    media:
-      loaded:
-        width_mm: 50
-        height_mm: 24
-        color: white
-        type: thermal
-
-    alignment:
-      dpi: 203
-      offset_x_mm: 0.0
-      offset_y_mm: 0.0
-
-    zpl:
-      darkness: 15
-      print_speed: 3
-      print_mode: tear_off
-
-    defaults:
-      copies: 1
-      rotation: 0
-
-    capabilities:
-      supports_status: true
-      supports_graphics: true
-      supports_cut: false
-
-    enabled: true
+- id: gastezimmer-labelprinter-thermopapier-giraffe-zpl
+  name: Gästezimmer Giraffe
+  model: LP 2824 Plus
+  vendor: Zebra
+  driver: zpl
+  connection:
+    protocol: raw9100
+    host: 192.168.0.101
+    port: 9100
+    timeout_ms: 10000
+  media:
+    loaded:
+      width_mm: 50
+      height_mm: 25
+      color: white
+      type: thermal
+  alignment:
+    dpi: 203
+    offset_x_mm: 0
+    offset_y_mm: 0
+  zpl:
+    darkness: 15
+    print_speed: 3
+    print_mode: tear_off
+  defaults:
+    copies: 1
+    rotation: 0
+  capabilities:
+    supports_status: true
+    supports_graphics: true
+    supports_cut: false
+  enabled: true
+- id: kuche-labelprinter-thermopapier-ente-zpl
+  name: Küche Ente
+  model: LP 2824 Plus
+  vendor: Zebra
+  driver: zpl
+  connection:
+    protocol: raw9100
+    host: 192.168.0.102
+    port: 9100
+    timeout_ms: 10000
+  media:
+    loaded:
+      width_mm: 50
+      height_mm: 25
+      color: white
+      type: thermal
+  alignment:
+    dpi: 203
+    offset_x_mm: 0
+    offset_y_mm: 0
+  zpl:
+    darkness: 10
+    print_speed: 3
+    print_mode: tear_off
+  defaults:
+    copies: 1
+    rotation: 0
+  capabilities:
+    supports_status: true
+    supports_graphics: true
+    supports_cut: true
+  enabled: true
+- id: gastezimmer-labelprinter-thermotransfer-schildkrote-zpl
+  name: Gästezimmer Schildkröte
+  model: T402
+  vendor: Zebra
+  driver: zpl
+  connection:
+    protocol: raw9100
+    host: 192.168.0.101
+    port: 9101
+    timeout_ms: 10000
+  media:
+    loaded:
+      width_mm: 74
+      height_mm: 26
+      color: white
+      type: thermotransfer
+  alignment:
+    dpi: 203
+    offset_x_mm: 0
+    offset_y_mm: 0
+  zpl:
+    darkness: 10
+    print_speed: 3
+    print_mode: tear_off
+  defaults:
+    copies: 1
+    rotation: 0
+  capabilities:
+    supports_status: true
+    supports_graphics: true
+    supports_cut: true
+  enabled: true
