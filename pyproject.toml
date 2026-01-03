@@ -16,9 +16,12 @@ requests = "^2.32.0"
 segno = "^1.6.1"
 pylibdmtx = "^0.1.10"
 setuptools = "^80.9.0"
+pyyaml = "^6.0.2"
+python-dotenv = "^1.2.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
+httpx = "^0.28.1"
 
 [tool.pytest.ini_options]
 norecursedirs = [

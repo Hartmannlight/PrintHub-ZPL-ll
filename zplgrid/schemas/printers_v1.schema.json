@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Printers config v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_version", "printers"],
+  "properties": {
+    "config_version": {
+      "const": 1
+    },
+    "printers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/printer"
+      },
+      "default": []
+    }
+  },
+  "$defs": {
+    "printer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "model",
+        "vendor",
+        "driver",
+        "connection",
+        "media",
+        "alignment",
+        "zpl",
+        "defaults",
+        "capabilities",
+        "enabled"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "vendor": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string", "minLength": 1 },
+        "connection": { "$ref": "#/$defs/connection" },
+        "media": { "$ref": "#/$defs/media" },
+        "alignment": { "$ref": "#/$defs/alignment" },
+        "zpl": { "$ref": "#/$defs/zpl" },
+        "defaults": { "$ref": "#/$defs/defaults" },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "host", "port", "timeout_ms"],
+      "properties": {
+        "protocol": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "timeout_ms": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["loaded"],
+      "properties": {
+        "loaded": { "$ref": "#/$defs/media_loaded" }
+      }
+    },
+    "media_loaded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width_mm", "height_mm", "color", "type"],
+      "properties": {
+        "width_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "height_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "color": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "alignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dpi", "offset_x_mm", "offset_y_mm"],
+      "properties": {
+        "dpi": { "type": "integer", "minimum": 1 },
+        "offset_x_mm": { "type": "number" },
+        "offset_y_mm": { "type": "number" }
+      }
+    },
+    "zpl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["darkness", "print_speed"],
+      "properties": {
+        "darkness": { "type": "integer", "minimum": 0 },
+        "print_speed": { "type": "integer", "minimum": 0 },
+        "print_mode": { "type": "string", "minLength": 1 }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["copies", "rotation"],
+      "properties": {
+        "copies": { "type": "integer", "minimum": 1 },
+        "rotation": { "type": "integer", "minimum": 0, "maximum": 360 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supports_status", "supports_graphics", "supports_cut"],
+      "properties": {
+        "supports_status": { "type": "boolean" },
+        "supports_graphics": { "type": "boolean" },
+        "supports_cut": { "type": "boolean" }
+      }
+    }
+  }
+}

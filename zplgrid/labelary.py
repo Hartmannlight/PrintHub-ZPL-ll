@@ -99,6 +99,32 @@ def render_labelary_png(
     return out_path
 
 
+def render_labelary_png_bytes(
+    zpl: str,
+    *,
+    dpmm: int = 8,
+    label_width_in: float = 4.0,
+    label_height_in: float = 6.0,
+    index: int = 0,
+    timeout_s: int = 30,
+) -> bytes:
+    url = f'http://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
+    files = {'file': zpl}
+    headers = {'Accept': 'image/png'}
+
+    for attempt in range(3):
+        _rate_limit_labelary()
+        resp = requests.post(url, headers=headers, files=files, stream=True, timeout=timeout_s)
+        if resp.status_code == 429 and attempt < 2:
+            time.sleep(0.75)
+            continue
+        if resp.status_code != 200:
+            raise RuntimeError(f'Labelary error {resp.status_code}: {resp.text}')
+        break
+
+    return resp.content
+
+
 def lint_labelary_zpl(
     zpl: str,
     *,

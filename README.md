@@ -20,7 +20,7 @@ Design goals:
 
 ## Files
 
-- `schemas/zplgrid_template_v1.schema.json`: JSON Schema (draft 2020-12).
+- `zplgrid/schemas/zplgrid_template_v1.schema.json`: JSON Schema (draft 2020-12).
 - `zplgrid/`: library code.
 - `examples/`: example template + compilation script.
 
@@ -46,7 +46,7 @@ The API listens at `http://127.0.0.1:8000` by default.
 
 ### Endpoint
 
-`POST /v1/render/zpl`
+`POST /v1/renders/zpl`
 
 Request body:
 
@@ -70,6 +70,56 @@ Response:
 ### Errors
 
 - Missing variables or invalid templates return `400` with a short `detail` message.
+
+## API: Print drafts (Design -> Operator UI)
+
+The backend can store print drafts so the operator UI loads the payload by `draft_id`.
+
+### Endpoint
+
+`POST /v1/drafts`
+
+Request body:
+
+```json
+{
+  "template": { "...": "..." },
+  "variables": { "name": "Widget" },
+  "target": { "width_mm": 50, "height_mm": 24, "dpi": 203, "origin_x_mm": 0, "origin_y_mm": 0 },
+  "debug": false
+}
+```
+
+Response:
+
+```json
+{
+  "draft_id": "abcd1234",
+  "expires_at": "2025-01-01T12:00:00+00:00"
+}
+```
+
+`GET /v1/drafts/{draft_id}`
+
+Response:
+
+```json
+{
+  "draft_id": "abcd1234",
+  "template": { "...": "..." },
+  "variables": { "name": "Widget" },
+  "target": { "width_mm": 50, "height_mm": 24, "dpi": 203, "origin_x_mm": 0, "origin_y_mm": 0 },
+  "debug": false,
+  "created_at": "2025-01-01T11:30:00+00:00",
+  "expires_at": "2025-01-01T12:00:00+00:00"
+}
+```
+
+### Draft TTL
+
+- Drafts expire automatically (default 30 minutes).
+- Expired drafts are deleted and return `404`.
+- Override TTL with `ZPLGRID_PRINT_DRAFT_TTL_MINUTES` (integer minutes).
 
 ## Important limitations (by design in v1)
 
@@ -439,7 +489,6 @@ At compile time, the library does `str.format_map(variables)`.
 
 The schema shipped with the project:
 
-* `schemas/zplgrid_template_v1.schema.json` (copy)
 * `zplgrid/schemas/zplgrid_template_v1.schema.json` (used by Python validation)
 
 The Python library validates with `jsonschema` (Draft 2020-12) and then runs extra checks.
