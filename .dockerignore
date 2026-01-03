@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+tests
+examples
+out.zpl
+*.md
+!README.md
+*.log
