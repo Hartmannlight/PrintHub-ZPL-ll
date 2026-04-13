@@ -1,0 +1,1122 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "zplgrid API",
+    "version": "1.0"
+  },
+  "paths": {
+    "/v1/renders/zpl": {
+      "post": {
+        "summary": "Render Zpl",
+        "operationId": "render_zpl_v1_renders_zpl_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/renders/png": {
+      "post": {
+        "summary": "Render Png",
+        "operationId": "render_png_v1_renders_png_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/printers/{printer_id}/prints/zpl": {
+      "post": {
+        "summary": "Print Zpl",
+        "operationId": "print_zpl_v1_printers__printer_id__prints_zpl_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintZplRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/drafts": {
+      "post": {
+        "summary": "Create Print Draft",
+        "operationId": "create_print_draft_v1_drafts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintDraftCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintDraftResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/drafts/{draft_id}": {
+      "get": {
+        "summary": "Get Print Draft",
+        "operationId": "get_print_draft_v1_drafts__draft_id__get",
+        "parameters": [
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintDraftDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/printers/{printer_id}/prints/template": {
+      "post": {
+        "summary": "Print Template",
+        "operationId": "print_template_v1_printers__printer_id__prints_template_post",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/printers/{printer_id}/status": {
+      "get": {
+        "summary": "Get Printer Status",
+        "operationId": "get_printer_status_v1_printers__printer_id__status_get",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrinterStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates": {
+      "post": {
+        "summary": "Save Template",
+        "operationId": "save_template_v1_templates_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Template Entries",
+        "operationId": "list_template_entries_v1_templates_get",
+        "parameters": [
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tags"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateListItem"
+                  },
+                  "title": "Response List Template Entries V1 Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates/{template_id}": {
+      "put": {
+        "summary": "Update Template",
+        "operationId": "update_template_v1_templates__template_id__put",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Get Template Entry",
+        "operationId": "get_template_entry_v1_templates__template_id__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates/{template_id}/preview": {
+      "get": {
+        "summary": "Get Template Preview",
+        "operationId": "get_template_preview_v1_templates__template_id__preview_get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/printers": {
+      "get": {
+        "summary": "Get Printers",
+        "operationId": "get_printers_v1_printers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintersConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/printers/{printer_id}": {
+      "get": {
+        "summary": "Get Printer",
+        "operationId": "get_printer_v1_printers__printer_id__get",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Printer V1 Printers  Printer Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Upsert Printer",
+        "operationId": "upsert_printer_v1_printers__printer_id__put",
+        "parameters": [
+          {
+            "name": "printer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Printer Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintersConfigResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PrintDraftCreateRequest": {
+        "properties": {
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Variables"
+          },
+          "target": {
+            "$ref": "#/components/schemas/RenderTarget"
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "template",
+          "target"
+        ],
+        "title": "PrintDraftCreateRequest"
+      },
+      "PrintDraftDetailResponse": {
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "title": "Draft Id"
+          },
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Variables"
+          },
+          "target": {
+            "$ref": "#/components/schemas/RenderTarget"
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "draft_id",
+          "template",
+          "variables",
+          "target",
+          "debug",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "PrintDraftDetailResponse"
+      },
+      "PrintDraftResponse": {
+        "properties": {
+          "draft_id": {
+            "type": "string",
+            "title": "Draft Id"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "draft_id",
+          "expires_at"
+        ],
+        "title": "PrintDraftResponse"
+      },
+      "PrintResponse": {
+        "properties": {
+          "printer_id": {
+            "type": "string",
+            "title": "Printer Id"
+          },
+          "bytes_sent": {
+            "type": "integer",
+            "title": "Bytes Sent"
+          },
+          "preview_png_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Png Base64"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_id",
+          "bytes_sent"
+        ],
+        "title": "PrintResponse"
+      },
+      "PrintTemplateRequest": {
+        "properties": {
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Variables"
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug",
+            "default": false
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RenderTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "return_preview": {
+            "type": "boolean",
+            "title": "Return Preview",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "template"
+        ],
+        "title": "PrintTemplateRequest"
+      },
+      "PrintZplRequest": {
+        "properties": {
+          "zpl": {
+            "type": "string",
+            "title": "Zpl"
+          },
+          "return_preview": {
+            "type": "boolean",
+            "title": "Return Preview",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "zpl"
+        ],
+        "title": "PrintZplRequest"
+      },
+      "PrinterStatusResponse": {
+        "properties": {
+          "printer_id": {
+            "type": "string",
+            "title": "Printer Id"
+          },
+          "raw": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Raw"
+          },
+          "parsed": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parsed"
+          },
+          "normalized": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Normalized"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_id",
+          "raw",
+          "parsed",
+          "normalized"
+        ],
+        "title": "PrinterStatusResponse"
+      },
+      "PrintersConfigResponse": {
+        "properties": {
+          "config_version": {
+            "type": "integer",
+            "title": "Config Version"
+          },
+          "printers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Printers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "config_version",
+          "printers"
+        ],
+        "title": "PrintersConfigResponse"
+      },
+      "RenderRequest": {
+        "properties": {
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "target": {
+            "$ref": "#/components/schemas/RenderTarget"
+          },
+          "variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Variables"
+          },
+          "debug": {
+            "type": "boolean",
+            "title": "Debug",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "template",
+          "target"
+        ],
+        "title": "RenderRequest"
+      },
+      "RenderResponse": {
+        "properties": {
+          "zpl": {
+            "type": "string",
+            "title": "Zpl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "zpl"
+        ],
+        "title": "RenderResponse"
+      },
+      "RenderTarget": {
+        "properties": {
+          "width_mm": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Width Mm"
+          },
+          "height_mm": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Height Mm"
+          },
+          "dpi": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Dpi",
+            "default": 203
+          },
+          "origin_x_mm": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Origin X Mm",
+            "default": 0.0
+          },
+          "origin_y_mm": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Origin Y Mm",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "width_mm",
+          "height_mm"
+        ],
+        "title": "RenderTarget"
+      },
+      "TemplateDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "variables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "preview_target": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Preview Target"
+          },
+          "preview_available": {
+            "type": "boolean",
+            "title": "Preview Available"
+          },
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "sample_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Sample Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "tags",
+          "variables",
+          "preview_target",
+          "preview_available",
+          "template",
+          "sample_data"
+        ],
+        "title": "TemplateDetailResponse"
+      },
+      "TemplateListItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "variables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "preview_target": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Preview Target"
+          },
+          "preview_available": {
+            "type": "boolean",
+            "title": "Preview Available"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "tags",
+          "variables",
+          "preview_target",
+          "preview_available"
+        ],
+        "title": "TemplateListItem"
+      },
+      "TemplateSaveRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "variables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "sample_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Sample Data"
+          },
+          "preview_target": {
+            "$ref": "#/components/schemas/RenderTarget"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "template",
+          "sample_data",
+          "preview_target"
+        ],
+        "title": "TemplateSaveRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

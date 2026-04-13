@@ -58,6 +58,11 @@ if _cors_origins:
     )
 
 
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 class PrintersConfigResponse(BaseModel):
     config_version: int
     printers: list[dict[str, Any]]

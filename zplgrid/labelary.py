@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import threading
 import time
@@ -11,6 +12,10 @@ import requests
 _RATE_LIMIT_LOCK = threading.Lock()
 _LAST_REQUEST_AT = 0.0
 _MIN_SECONDS_BETWEEN_REQUESTS = 0.4
+
+
+def _labelary_base_url() -> str:
+    return os.getenv('LABELARY_BASE_URL', 'http://api.labelary.com').rstrip('/')
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,7 @@ def render_labelary_png(
 ) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    url = f'http://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
+    url = f'{_labelary_base_url()}/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
     files = {'file': zpl}
     headers = {'Accept': 'image/png'}
 
@@ -108,7 +113,7 @@ def render_labelary_png_bytes(
     index: int = 0,
     timeout_s: int = 30,
 ) -> bytes:
-    url = f'http://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
+    url = f'{_labelary_base_url()}/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
     files = {'file': zpl}
     headers = {'Accept': 'image/png'}
 
@@ -137,7 +142,7 @@ def lint_labelary_zpl(
 ) -> list[LabelaryWarning]:
     if compact:
         zpl = _compact_zpl(zpl)
-    url = f'http://api.labelary.com/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
+    url = f'{_labelary_base_url()}/v1/printers/{dpmm}dpmm/labels/{label_width_in}x{label_height_in}/{index}/'
     headers = {'Accept': 'image/png', 'X-Linter': 'On', 'Content-Type': 'application/x-www-form-urlencoded'}
 
     for attempt in range(3):

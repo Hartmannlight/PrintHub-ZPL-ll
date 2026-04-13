@@ -1,3 +1,5 @@
 codex.exe
 artifacts/
 /tests/_renders/
+__pycache__/
+*.py[cod]
