@@ -820,6 +820,8 @@ def get_template_entry(template_id: str) -> TemplateDetailResponse:
         entry = load_template_entry(template_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f'Template not found: {template_id}') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         template_json = json.loads(entry.template_path.read_text(encoding='utf-8'))
@@ -845,6 +847,8 @@ def get_template_preview(template_id: str) -> Response:
         entry = load_template_entry(template_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f'Template not found: {template_id}') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     preview_path = entry.preview_path
     if not preview_path.exists():

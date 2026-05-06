@@ -1,3 +1,5 @@
+import importlib.util
+
 import pytest
 
 from zplgrid.compiler import compile_zpl
@@ -20,6 +22,8 @@ def _base_template(element):
 
 
 def test_qr_image_mode_requires_segno():
+    if importlib.util.find_spec('segno') is not None:
+        pytest.skip('segno is installed in this environment')
     template = _base_template(
         {
             'type': 'qr',

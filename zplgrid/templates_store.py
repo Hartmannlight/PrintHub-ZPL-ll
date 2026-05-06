@@ -13,6 +13,7 @@ _METADATA_FILENAME = 'metadata.json'
 _TEMPLATE_FILENAME = 'template.json'
 _SAMPLE_DATA_FILENAME = 'sample_data.json'
 _PREVIEW_FILENAME = 'preview.png'
+_TEMPLATE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,80}$')
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,21 @@ class TemplateEntry:
 def ensure_templates_dir() -> Path:
     _TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     return _TEMPLATES_DIR
+
+
+def validate_template_id(template_id: str) -> str:
+    if not _TEMPLATE_ID_RE.fullmatch(template_id):
+        raise ValueError('template_id must match ^[a-z0-9][a-z0-9-]{0,80}$')
+    return template_id
+
+
+def _template_dir(root: Path, template_id: str) -> Path:
+    validated_id = validate_template_id(template_id)
+    root_resolved = root.resolve()
+    dir_path = (root / validated_id).resolve()
+    if dir_path != root_resolved and root_resolved not in dir_path.parents:
+        raise ValueError('template_id resolves outside templates directory')
+    return dir_path
 
 
 def _slugify(value: str) -> str:
@@ -108,7 +124,7 @@ def list_templates(*, tags: set[str] | None = None) -> list[TemplateEntry]:
 
 def load_template_entry(template_id: str) -> TemplateEntry:
     root = ensure_templates_dir()
-    dir_path = root / template_id
+    dir_path = _template_dir(root, template_id)
     metadata_path = dir_path / _METADATA_FILENAME
     if not metadata_path.exists():
         raise FileNotFoundError(template_id)
@@ -141,7 +157,8 @@ def save_template_entry(
     existing_ids = {entry.name for entry in root.iterdir() if entry.is_dir()}
     base_id = _slugify(name)
     template_id = _unique_template_id(base_id, existing_ids)
-    dir_path = root / template_id
+    validate_template_id(template_id)
+    dir_path = _template_dir(root, template_id)
     dir_path.mkdir(parents=True, exist_ok=True)
 
     metadata = {
@@ -183,7 +200,7 @@ def update_template_entry(
     preview_png: bytes | None,
 ) -> TemplateEntry:
     root = ensure_templates_dir()
-    dir_path = root / template_id
+    dir_path = _template_dir(root, template_id)
     if not dir_path.exists():
         raise FileNotFoundError(template_id)
     dir_path.mkdir(parents=True, exist_ok=True)
