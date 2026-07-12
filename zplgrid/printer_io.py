@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 import socket
+from dataclasses import dataclass
 from typing import Any, Mapping
+
+from .zebra_tamer import submit_zpl
+
+
+@dataclass(frozen=True)
+class PrintDispatchResult:
+    bytes_sent: int
+    job_id: str | None = None
+    job_state: str | None = None
 
 
 def apply_printer_settings(zpl: str, printer: Mapping[str, Any]) -> str:
@@ -39,6 +49,31 @@ def send_raw_zpl(printer: Mapping[str, Any], zpl: str) -> int:
         sock.settimeout(timeout_s)
         sock.sendall(payload)
     return len(payload)
+
+
+def dispatch_zpl(
+    printer: Mapping[str, Any],
+    zpl: str,
+    *,
+    description: str | None = None,
+) -> PrintDispatchResult:
+    connection = printer.get('connection') or {}
+    protocol = connection.get('protocol')
+    if protocol == 'raw9100':
+        return PrintDispatchResult(bytes_sent=send_raw_zpl(printer, zpl))
+    if protocol == 'zebra_tamer':
+        job = submit_zpl(
+            connection,
+            zpl,
+            origin='printhub',
+            description=description,
+        )
+        return PrintDispatchResult(
+            bytes_sent=job.bytes_sent,
+            job_id=job.job_id,
+            job_state=job.state,
+        )
+    raise ValueError(f'Unsupported protocol: {protocol}')
 
 
 def query_raw_command(printer: Mapping[str, Any], command: str) -> str:

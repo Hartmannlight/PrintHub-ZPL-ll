@@ -1,4 +1,37 @@
-# zplgrid (v1)
+# zplgrid / PrintHub (v1)
+
+PrintHub is an independent template, render and print service. It does not
+require Thingdex. Its primary web client is PrintHub Studio.
+
+## ZebraTamer printers
+
+ZebraTamer is the preferred hardware boundary. Register a printer with:
+
+```yaml
+connection:
+  protocol: zebra_tamer
+  base_url: http://zpl-agent.local:8080
+  printer_id: schildkrote
+  timeout_ms: 10000
+```
+
+PrintHub submits `application/zpl` to
+`POST /v1/printers/{printer_id}/jobs` and returns the ZebraTamer job id/state to
+the client. Printer status comes from the ZebraTamer snapshot API.
+
+`GET /v1/zebra-tamer/agents` performs best-effort mDNS discovery. Explicit
+fallback URLs can be supplied as a comma-separated list in
+`ZPLGRID_ZEBRA_TAMER_AGENTS`.
+
+Legacy `raw9100` connections remain supported for migration and emulators.
+
+## Typed template inputs
+
+Entries in a template's `variables` array may include `label`, `type`,
+`placeholder`, `options` and `source_hint` in addition to `name`, `mode` and
+`default`. PrintHub Studio uses those fields to build the mobile form.
+`source_hint` is optional integration metadata; standalone PrintHub users can
+always enter the value manually.
 
 zplgrid compiles JSON layout templates into ZPL II. The repo also ships a small FastAPI
 service that renders, previews, and prints labels, plus endpoints to store templates and
@@ -207,6 +240,18 @@ Previews are generated only if `ZPLGRID_ENABLE_LABELARY_TEMPLATES=1`.
 Templates are stored under `templates/` (override with `ZPLGRID_TEMPLATES_DIR`).
 
 ### Printing
+
+For saved templates, prefer the persistent job API:
+
+- `POST /v1/print-jobs` creates a job before rendering and dispatch.
+- `GET /v1/print-jobs` lists recent jobs.
+- `GET /v1/print-jobs/{job_id}` returns its status and downstream job ID.
+- `POST /v1/print-jobs/{job_id}/retry` explicitly retries a failed job.
+
+Jobs are stored under `ZPLGRID_PRINT_JOBS_DIR` (default
+`/data/print-jobs`). An optional `idempotency_key` prevents duplicate printing
+when a caller retries the same business event. The synchronous endpoints below
+remain available for drafts and compatibility clients.
 
 - `POST /v1/printers/{printer_id}/prints/zpl`
   - Body: `{ "zpl": "^XA...", "return_preview": false }`

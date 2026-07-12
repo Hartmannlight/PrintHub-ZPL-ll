@@ -52,13 +52,25 @@
     "connection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocol", "host", "port", "timeout_ms"],
+      "required": ["protocol"],
       "properties": {
-        "protocol": { "type": "string", "minLength": 1 },
+        "protocol": { "enum": ["raw9100", "zebra_tamer"] },
         "host": { "type": "string", "minLength": 1 },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "timeout_ms": { "type": "integer", "minimum": 1 }
-      }
+        "timeout_ms": { "type": "integer", "minimum": 1 },
+        "base_url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "printer_id": { "type": "string", "minLength": 1 }
+      },
+      "oneOf": [
+        {
+          "properties": { "protocol": { "const": "raw9100" } },
+          "required": ["host", "port", "timeout_ms"]
+        },
+        {
+          "properties": { "protocol": { "const": "zebra_tamer" } },
+          "required": ["base_url", "printer_id", "timeout_ms"]
+        }
+      ]
     },
     "media": {
       "type": "object",

@@ -16,11 +16,19 @@ from .labelary import render_labelary_png_bytes
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
-from .printer_io import apply_printer_settings, query_raw_command, send_raw_zpl
+from .printer_io import apply_printer_settings, dispatch_zpl, query_raw_command
 from .printers_config import load_printers_config, save_printers_config
 from .print_drafts_store import load_print_draft, save_print_draft
+from .print_jobs_store import (
+    create_job as create_stored_print_job,
+    list_jobs as list_stored_print_jobs,
+    load_job as load_stored_print_job,
+    recover_interrupted_jobs,
+    save_job as save_stored_print_job,
+)
 from .render import RenderOptions, render_text
 from .templates_store import load_template_entry, list_templates, save_template_entry, update_template_entry
+from .zebra_tamer import discover_agent_urls, get_snapshot, list_agent_printers
 
 
 class RenderTarget(BaseModel):
@@ -70,6 +78,7 @@ class PrintersConfigResponse(BaseModel):
 
 @app.on_event("startup")
 def _load_printers_config_on_startup() -> None:
+    recover_interrupted_jobs()
     try:
         app.state.printers_config = load_printers_config()
     except ValueError as exc:
@@ -215,6 +224,31 @@ class PrintResponse(BaseModel):
     printer_id: str
     bytes_sent: int
     preview_png_base64: Optional[str] = None
+    job_id: Optional[str] = None
+    job_state: Optional[str] = None
+
+
+class PrintJobCreateRequest(BaseModel):
+    printer_id: str
+    template_id: str
+    variables: dict[str, Any] = Field(default_factory=dict)
+    target: Optional[RenderTarget] = None
+    idempotency_key: Optional[str] = Field(default=None, max_length=240)
+    origin: Optional[str] = Field(default=None, max_length=120)
+
+
+class PrintJobResponse(BaseModel):
+    id: str
+    status: str
+    printer_id: str
+    template_id: str
+    attempts: int
+    bytes_sent: Optional[int] = None
+    downstream_job_id: Optional[str] = None
+    downstream_job_state: Optional[str] = None
+    error: Optional[str] = None
+    created_at: str
+    updated_at: str
 
 
 class PrinterStatusResponse(BaseModel):
@@ -490,10 +524,10 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
     _ensure_printer_enabled(printer)
     zpl_with_settings = apply_printer_settings(payload.zpl, printer)
     try:
-        bytes_sent = send_raw_zpl(printer, zpl_with_settings)
+        dispatched = dispatch_zpl(printer, zpl_with_settings, description='Raw ZPL print')
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     dpmm, width_in, height_in = _printer_labelary_args(printer)
@@ -504,7 +538,13 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
         height_in=height_in,
         return_preview=payload.return_preview,
     )
-    return PrintResponse(printer_id=printer_id, bytes_sent=bytes_sent, preview_png_base64=preview)
+    return PrintResponse(
+        printer_id=printer_id,
+        bytes_sent=dispatched.bytes_sent,
+        preview_png_base64=preview,
+        job_id=dispatched.job_id,
+        job_state=dispatched.job_state,
+    )
 
 
 @app.post("/v1/drafts", response_model=PrintDraftResponse)
@@ -585,14 +625,18 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         target = payload.target or _printer_target(printer)
         zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=payload.debug)
         zpl_with_settings = apply_printer_settings(zpl, printer)
-        bytes_sent = send_raw_zpl(printer, zpl_with_settings)
+        dispatched = dispatch_zpl(
+            printer,
+            zpl_with_settings,
+            description=f"Template: {payload.template.get('name', 'Untitled')}",
+        )
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TemplateRenderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (CompilationError, LayoutError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     dpmm, width_in, height_in = _target_to_labelary_args(target)
@@ -603,7 +647,86 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         height_in=height_in,
         return_preview=payload.return_preview,
     )
-    return PrintResponse(printer_id=printer_id, bytes_sent=bytes_sent, preview_png_base64=preview)
+    return PrintResponse(
+        printer_id=printer_id,
+        bytes_sent=dispatched.bytes_sent,
+        preview_png_base64=preview,
+        job_id=dispatched.job_id,
+        job_state=dispatched.job_state,
+    )
+
+
+def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
+    job = dict(job)
+    job["attempts"] = int(job.get("attempts") or 0) + 1
+    job["status"] = "processing"
+    job["error"] = None
+    save_stored_print_job(job)
+    try:
+        entry = load_template_entry(str(job["template_id"]))
+        template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
+        target_payload = job.get("target")
+        response = print_template(
+            str(job["printer_id"]),
+            PrintTemplateRequest(
+                template=template_json,
+                variables=dict(job.get("variables") or {}),
+                target=RenderTarget(**target_payload) if isinstance(target_payload, dict) else None,
+                return_preview=False,
+            ),
+        )
+        job["status"] = "queued" if response.job_id else "sent"
+        job["bytes_sent"] = response.bytes_sent
+        job["downstream_job_id"] = response.job_id
+        job["downstream_job_state"] = response.job_state
+    except (FileNotFoundError, ValueError, OSError, RuntimeError, HTTPException) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        job["status"] = "failed"
+        job["error"] = str(detail)
+    return save_stored_print_job(job)
+
+
+@app.post("/v1/print-jobs", response_model=PrintJobResponse, status_code=202)
+def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
+    stored = create_stored_print_job(
+        printer_id=payload.printer_id,
+        template_id=payload.template_id,
+        variables=payload.variables,
+        target=payload.target.model_dump() if payload.target else None,
+        idempotency_key=payload.idempotency_key,
+        origin=payload.origin,
+    )
+    if int(stored.get("attempts") or 0) > 0:
+        return PrintJobResponse(**stored)
+    return PrintJobResponse(**_process_stored_print_job(stored))
+
+
+@app.get("/v1/print-jobs", response_model=list[PrintJobResponse])
+def get_print_jobs(limit: int = 50) -> list[PrintJobResponse]:
+    return [PrintJobResponse(**job) for job in list_stored_print_jobs(limit)]
+
+
+@app.get("/v1/print-jobs/{job_id}", response_model=PrintJobResponse)
+def get_print_job(job_id: str) -> PrintJobResponse:
+    try:
+        return PrintJobResponse(**load_stored_print_job(job_id))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Print job not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/v1/print-jobs/{job_id}/retry", response_model=PrintJobResponse)
+def retry_print_job(job_id: str) -> PrintJobResponse:
+    try:
+        job = load_stored_print_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Print job not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if job.get("status") not in {"failed", "outcome_unknown"}:
+        raise HTTPException(status_code=409, detail="Only failed print jobs can be retried")
+    return PrintJobResponse(**_process_stored_print_job(job))
 
 
 @app.get("/v1/printers/{printer_id}/status", response_model=PrinterStatusResponse)
@@ -611,6 +734,31 @@ def get_printer_status(printer_id: str) -> PrinterStatusResponse:
     printer = _get_printer(printer_id)
     _ensure_printer_enabled(printer)
     _ensure_printer_supports_status(printer)
+
+    connection = printer.get('connection') or {}
+    if connection.get('protocol') == 'zebra_tamer':
+        try:
+            snapshot = get_snapshot(connection)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return PrinterStatusResponse(
+            printer_id=printer_id,
+            raw={},
+            parsed=snapshot,
+            normalized={
+                'summary': {
+                    'model': ((snapshot.get('identity') or {}).get('model') or {}).get('value'),
+                    'firmware': ((snapshot.get('identity') or {}).get('firmware') or {}).get('value'),
+                    'ready': ((snapshot.get('status') or {}).get('ready') or {}).get('value'),
+                    'media_out': ((snapshot.get('status') or {}).get('media_out') or {}).get('value'),
+                    'head_open': ((snapshot.get('status') or {}).get('head_open') or {}).get('value'),
+                    'job_state': ((snapshot.get('jobs') or {}).get('last_job_state')),
+                },
+                'zebra_tamer_snapshot': snapshot,
+            },
+        )
 
     commands = {
         'host_status': '~HS',
@@ -865,6 +1013,18 @@ def get_printers() -> PrintersConfigResponse:
     config = getattr(app.state, 'printers_config', None) or load_printers_config()
     app.state.printers_config = config
     return PrintersConfigResponse(**config)
+
+
+@app.get("/v1/zebra-tamer/agents")
+def get_zebra_tamer_agents() -> dict[str, Any]:
+    agents: list[dict[str, Any]] = []
+    for base_url in discover_agent_urls():
+        try:
+            printers = list_agent_printers(base_url)
+            agents.append({"base_url": base_url, "available": True, "printers": printers})
+        except Exception as exc:
+            agents.append({"base_url": base_url, "available": False, "printers": [], "error": str(exc)})
+    return {"agents": agents}
 
 
 @app.get("/v1/printers/{printer_id}")
