@@ -330,6 +330,9 @@
         "divider": {
           "$ref": "#/$defs/divider"
         },
+        "background": {
+          "$ref": "#/$defs/image_background"
+        },
         "children": {
           "type": "array",
           "minItems": 2,
@@ -365,6 +368,9 @@
         },
         "debug_border": {
           "type": "boolean"
+        },
+        "background": {
+          "$ref": "#/$defs/image_background"
         },
         "elements": {
           "type": "array",
@@ -899,6 +905,62 @@
         "data": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "image_background": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/image_source"
+        },
+        "fit": {
+          "enum": [
+            "none",
+            "contain",
+            "cover",
+            "stretch"
+          ]
+        },
+        "align_h": {
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ]
+        },
+        "align_v": {
+          "enum": [
+            "top",
+            "center",
+            "bottom"
+          ]
+        },
+        "input_dpi": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "dither": {
+          "enum": [
+            "none",
+            "floyd_steinberg",
+            "bayer"
+          ]
+        },
+        "invert": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "type": "object"
         }
       }
     },

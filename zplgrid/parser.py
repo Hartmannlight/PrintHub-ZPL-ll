@@ -8,6 +8,7 @@ from .exceptions import TemplateIssue, TemplateValidationError
 from .model import (
     DataMatrixElement,
     Divider,
+    ImageBackground,
     ImageElement,
     ImageSource,
     LeafNode,
@@ -64,6 +65,7 @@ def _parse_node(raw: Mapping[str, Any], *, defaults: TemplateDefaults, path: str
     kind = str(raw['kind'])
     alias = raw.get('alias')
     extensions = dict(raw.get('extensions') or {})
+    background = _parse_background(raw.get('background'), defaults=defaults)
 
     if kind == 'split':
         divider_raw = raw.get('divider') or {}
@@ -82,6 +84,7 @@ def _parse_node(raw: Mapping[str, Any], *, defaults: TemplateDefaults, path: str
             gutter_mm=float(raw.get('gutter_mm', 0.0)),
             divider=divider,
             children=(child0, child1),
+            background=background,
             extensions=extensions,
         )
 
@@ -96,10 +99,32 @@ def _parse_node(raw: Mapping[str, Any], *, defaults: TemplateDefaults, path: str
             padding_mm=padding_mm,
             debug_border=bool(raw.get('debug_border', False)),
             elements=elements,
+            background=background,
             extensions=extensions,
         )
 
     raise ValueError(f'unsupported node kind: {kind}')
+
+
+def _parse_background(raw: Any, *, defaults: TemplateDefaults) -> Optional[ImageBackground]:
+    if raw is None:
+        return None
+    merged = {**defaults.image_defaults, **dict(raw)}
+    source_raw = merged.get('source') or {}
+    return ImageBackground(
+        source=ImageSource(
+            kind=str(source_raw.get('kind', 'base64')),
+            data=str(source_raw.get('data', '')),
+        ),
+        fit=merged.get('fit'),
+        align_h=merged.get('align_h'),
+        align_v=merged.get('align_v'),
+        input_dpi=merged.get('input_dpi'),
+        threshold=merged.get('threshold'),
+        dither=merged.get('dither'),
+        invert=merged.get('invert'),
+        extensions=dict(raw.get('extensions') or {}),
+    )
 
 
 def _parse_padding_optional(raw: Optional[list[Any]]) -> PaddingMm:

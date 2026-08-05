@@ -72,6 +72,9 @@ Base URL: `http://127.0.0.1:8000`
 
 ### 2) Nodes
 
+Every node may define an optional `background` image. Ancestor backgrounds are rendered first,
+followed by descendant backgrounds and the leaf foreground elements.
+
 - `split` node: divides a rectangle into two children.
   - `direction`: "v" (left/right) or "h" (top/bottom)
   - `ratio`: float between 0 and 1
@@ -80,6 +83,8 @@ Base URL: `http://127.0.0.1:8000`
 - `leaf` node: terminal region with exactly one element in v1.
   - `padding_mm`: [top, right, bottom, left] in mm
   - `debug_border`: draw a border when debugging
+- `background` accepts the image fields `source`, `fit`, `align_h`, `align_v`,
+  `input_dpi`, `threshold`, `dither`, and `invert` on split and leaf nodes, including root.
 
 Canonical IDs (important for UI state):
 

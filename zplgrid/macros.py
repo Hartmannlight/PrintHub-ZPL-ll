@@ -35,7 +35,10 @@ def collect_template_placeholders(template) -> set[str]:
                 used.add(base)
 
     def check_node(node) -> None:
-        from .model import DataMatrixElement, LeafNode, QrElement, SplitNode, TextElement
+        from .model import DataMatrixElement, ImageElement, LeafNode, QrElement, SplitNode, TextElement
+
+        if node.background is not None:
+            add_from_text(node.background.source.data)
 
         if isinstance(node, LeafNode):
             element = node.elements[0]
@@ -45,6 +48,8 @@ def collect_template_placeholders(template) -> set[str]:
                 add_from_text(element.data)
             elif isinstance(element, DataMatrixElement):
                 add_from_text(element.data)
+            elif isinstance(element, ImageElement):
+                add_from_text(element.source.data)
             return
         if isinstance(node, SplitNode):
             for child in node.children:

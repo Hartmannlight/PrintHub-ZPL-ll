@@ -50,7 +50,11 @@ class MonospaceApproxMeasurer(TextMeasurer):
 
 
 class ZplMeasuredTextMeasurer(TextMeasurer):
-    _CHAR_WRAP_WIDTH_RATIO = 0.45
+    # Zebra's scalable font 0 is proportional. 0.6 is deliberately a little
+    # conservative for the common wide glyphs (A, M, W). Using a smaller value
+    # here than in _line_width used to create lines which did not actually fit
+    # once the printer's ^FB command laid them out a second time.
+    _FALLBACK_GLYPH_WIDTH_RATIO = 0.6
     def __init__(
         self,
         dpmm: int = 8,
@@ -197,7 +201,7 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
             return prev_char.isalnum() and next_char.isalnum()
 
         if not self._enable_network:
-            char_w = max(1, int(font_width_dots * self._CHAR_WRAP_WIDTH_RATIO))
+            char_w = max(1, int(font_width_dots * self._FALLBACK_GLYPH_WIDTH_RATIO))
             max_len = max(1, box_width_dots // char_w)
             while remaining:
                 if max_len >= len(remaining):

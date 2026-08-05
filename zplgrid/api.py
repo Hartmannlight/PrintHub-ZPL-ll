@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import asdict
 import json
 import os
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
+from .compiler import Compiler
 from .labelary import render_labelary_png_bytes
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
@@ -48,6 +50,7 @@ class RenderRequest(BaseModel):
 
 class RenderResponse(BaseModel):
     zpl: str
+    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
 
 
 load_dotenv()
@@ -124,6 +127,11 @@ def _target_to_labelary_args(target: RenderTarget) -> tuple[int, float, float]:
     return dpmm, label_width_in, label_height_in
 
 
+def _diagnostics_header(diagnostics: list[dict[str, Any]]) -> str:
+    payload = json.dumps(diagnostics, ensure_ascii=True, separators=(',', ':')).encode('ascii')
+    return base64.urlsafe_b64encode(payload).decode('ascii')
+
+
 @app.post("/v1/renders/zpl", response_model=RenderResponse)
 def render_zpl(payload: RenderRequest) -> RenderResponse:
     try:
@@ -149,8 +157,8 @@ def render_zpl(payload: RenderRequest) -> RenderResponse:
             origin_x_mm=payload.target.origin_x_mm,
             origin_y_mm=payload.target.origin_y_mm,
         )
-        zpl = template.compile(target=target, variables=variables, debug=payload.debug)
-        return RenderResponse(zpl=zpl)
+        result = Compiler().compile_with_diagnostics(template, target=target, variables=variables, debug=payload.debug)
+        return RenderResponse(zpl=result.zpl, diagnostics=[asdict(item) for item in result.diagnostics])
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TemplateRenderError as exc:
@@ -186,17 +194,25 @@ def render_png(payload: RenderRequest) -> Response:
             origin_x_mm=payload.target.origin_x_mm,
             origin_y_mm=payload.target.origin_y_mm,
         )
-        zpl = template.compile(target=target, variables=variables, debug=payload.debug)
+        result = Compiler().compile_with_diagnostics(template, target=target, variables=variables, debug=payload.debug)
+        diagnostics = [asdict(item) for item in result.diagnostics]
         dpmm, width_in, height_in = _target_to_labelary_args(payload.target)
         image_bytes = render_labelary_png_bytes(
-            zpl,
+            result.zpl,
             dpmm=dpmm,
             label_width_in=width_in,
             label_height_in=height_in,
             index=0,
             timeout_s=30,
         )
-        return Response(content=image_bytes, media_type="image/png")
+        return Response(
+            content=image_bytes,
+            media_type="image/png",
+            headers={
+                'X-PrintHub-Diagnostics': _diagnostics_header(diagnostics),
+                'Access-Control-Expose-Headers': 'X-PrintHub-Diagnostics',
+            },
+        )
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except TemplateRenderError as exc:

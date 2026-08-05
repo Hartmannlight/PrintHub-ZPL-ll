@@ -4,13 +4,12 @@ from dataclasses import dataclass
 import base64
 import io
 import os
-import warnings
 from typing import Any, Mapping, Optional
 
 from .exceptions import CompilationError
 from .layout import compute_layout
 from .measure import TextMeasurer, ZplMeasuredTextMeasurer
-from .model import DataMatrixElement, ImageElement, LeafNode, LabelTarget, LineElement, QrElement, Template, TextElement
+from .model import DataMatrixElement, ImageBackground, ImageElement, LeafNode, LabelTarget, LineElement, QrElement, Template, TextElement
 from .render import RenderOptions, render_text
 from .units import clamp_int, mm_to_dots
 from .zpl import ZplBuilder, ZplOptions, encode_field_data
@@ -23,11 +22,36 @@ def compile_zpl(template_json: str | bytes | Mapping[str, Any], *, target: Label
     return template.compile(target=target, variables=variables or {}, debug=debug)
 
 
+@dataclass(frozen=True)
+class CompilationDiagnostic:
+    code: str
+    message: str
+    severity: str = 'warning'
+    element_id: str | None = None
+    leaf_alias: str | None = None
+    actual_lines: int | None = None
+    max_lines: int | None = None
+
+
+@dataclass(frozen=True)
+class CompilationResult:
+    zpl: str
+    diagnostics: tuple[CompilationDiagnostic, ...]
+
+
 @dataclass
 class Compiler:
     text_measurer: TextMeasurer = ZplMeasuredTextMeasurer()
 
     def compile(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> str:
+        return self.compile_with_diagnostics(
+            template,
+            target=target,
+            variables=variables,
+            debug=debug,
+        ).zpl
+
+    def compile_with_diagnostics(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> CompilationResult:
         width_dots = mm_to_dots(target.width_mm, target.dpi)
         height_dots = mm_to_dots(target.height_mm, target.dpi)
         origin_x = mm_to_dots(target.origin_x_mm, target.dpi)
@@ -42,7 +66,48 @@ class Compiler:
         layout = compute_layout(template.layout, width_dots=width_dots, height_dots=height_dots, dpi=target.dpi)
 
         z = ZplBuilder(options=zpl_opts)
+        diagnostics: list[CompilationDiagnostic] = []
         z.start_label(width_dots=width_dots, height_dots=height_dots, origin_x=origin_x, origin_y=origin_y)
+
+        for background in layout.backgrounds:
+            self._emit_image(
+                z,
+                element=background.background,
+                rect=background.rect,
+                variables=variables,
+                render_opts=render_opts,
+                dpi=target.dpi,
+            )
+
+        for leaf in layout.leaves:
+            if debug or leaf.node.debug_border:
+                self._emit_border(z, leaf.rect)
+            if debug_padding_guides:
+                self._emit_padding_guide(z, leaf.content_rect)
+
+            element = leaf.node.elements[0]
+            element_box = self._compute_element_box(element=element, rect=leaf.content_rect, dpi=target.dpi)
+
+            if isinstance(element, TextElement):
+                diagnostics.extend(self._emit_text(
+                    z,
+                    element=element,
+                    rect=element_box,
+                    variables=variables,
+                    render_opts=render_opts,
+                    dpi=target.dpi,
+                    leaf_alias=leaf.node.alias,
+                ))
+            elif isinstance(element, QrElement):
+                self._emit_qr(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+            elif isinstance(element, DataMatrixElement):
+                self._emit_datamatrix(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+            elif isinstance(element, ImageElement):
+                self._emit_image(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+            elif isinstance(element, LineElement):
+                self._emit_line(z, element=element, rect=element_box, dpi=target.dpi)
+            else:
+                raise CompilationError(f'unsupported element type: {element.type!r}')
 
         for divider in layout.dividers:
             if divider.rect.w <= 0 or divider.rect.h <= 0:
@@ -56,30 +121,8 @@ class Compiler:
             for gutter in layout.gutters:
                 self._emit_gutter_guide(z, rect=gutter.rect, direction=gutter.direction)
 
-        for leaf in layout.leaves:
-            if debug or leaf.node.debug_border:
-                self._emit_border(z, leaf.rect)
-            if debug_padding_guides:
-                self._emit_padding_guide(z, leaf.content_rect)
-
-            element = leaf.node.elements[0]
-            element_box = self._compute_element_box(element=element, rect=leaf.content_rect, dpi=target.dpi)
-
-            if isinstance(element, TextElement):
-                self._emit_text(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
-            elif isinstance(element, QrElement):
-                self._emit_qr(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
-            elif isinstance(element, DataMatrixElement):
-                self._emit_datamatrix(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
-            elif isinstance(element, ImageElement):
-                self._emit_image(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
-            elif isinstance(element, LineElement):
-                self._emit_line(z, element=element, rect=element_box, dpi=target.dpi)
-            else:
-                raise CompilationError(f'unsupported element type: {element.type!r}')
-
         z.end_label()
-        return z.build()
+        return CompilationResult(zpl=z.build(), diagnostics=tuple(diagnostics))
 
     def _emit_border(self, z: ZplBuilder, rect) -> None:
         t = 1
@@ -124,7 +167,7 @@ class Compiler:
 
         return box
 
-    def _emit_text(self, z: ZplBuilder, *, element: TextElement, rect, variables: Mapping[str, Any], render_opts: RenderOptions, dpi: int) -> None:
+    def _emit_text(self, z: ZplBuilder, *, element: TextElement, rect, variables: Mapping[str, Any], render_opts: RenderOptions, dpi: int, leaf_alias: str | None = None) -> list[CompilationDiagnostic]:
         raw_text = render_text(element.text, variables, options=render_opts)
         raw_text = raw_text.replace('\r\n', '\n').replace('\r', '\n')
         raw_text = raw_text.replace('\\n', '\n')
@@ -145,38 +188,18 @@ class Compiler:
         align_h = element.align_h or 'left'
         align_v = element.align_v or 'center'
 
-        justification = {'left': 'L', 'center': 'C', 'right': 'R'}[align_h]
         line_spacing = 0
-
-        box_x = rect.x
-        box_y = rect.y
-
-        explicit_lines = raw_text.split('\n')
-        explicit_line_count = len(explicit_lines)
-        explicit_lines_overflow = max_lines < 9999 and explicit_line_count > max_lines
-        wrap_for_layout = wrap
-        wrap_for_shrink = wrap
-        if fit == 'shrink_to_fit' and wrap_for_layout == 'char':
-            wrap_for_shrink = 'word'
-        if fit == 'shrink_to_fit' and explicit_lines_overflow:
-            wrap_for_layout = 'none'
-            wrap_for_shrink = 'none'
-            warnings.warn(
-                f'Text element exceeds max_lines ({explicit_line_count} > {max_lines}); '
-                'preserving explicit line breaks and ignoring max_lines for them.',
-                stacklevel=2,
-            )
+        diagnostics: list[CompilationDiagnostic] = []
 
         measurer = self._text_measurer_for_dpi(dpi)
         if fit == 'shrink_to_fit':
-            shrink_max_lines = explicit_line_count if explicit_lines_overflow else max_lines
             font_h, font_w = self._shrink_text(
                 text=raw_text,
                 rect=rect,
                 font_h=font_h,
                 font_w=font_w,
-                wrap=wrap_for_shrink,
-                max_lines=shrink_max_lines,
+                wrap=wrap,
+                max_lines=max_lines,
                 line_spacing=line_spacing,
                 measurer=measurer,
             )
@@ -188,55 +211,123 @@ class Compiler:
                 box_width_dots=rect.w,
                 font_height_dots=font_h,
                 font_width_dots=font_w,
-                wrap=wrap_for_layout,
+                wrap=wrap,
             )
+            natural_line_count = len(layout_lines)
             if fit == 'truncate':
                 layout_lines = layout_lines[:max_lines]
+        else:
+            natural_line_count = len(raw_text.split('\n'))
 
-        if align_v in ('center', 'bottom'):
-            if layout_lines is not None and isinstance(measurer, ZplMeasuredTextMeasurer):
-                metrics = measurer.measure_wrapped(
-                    lines=layout_lines,
-                    font_height_dots=font_h,
-                    font_width_dots=font_w,
-                    line_spacing_dots=line_spacing,
+        if layout_lines is None:
+            layout_lines = raw_text.split('\n')
+        natural_line_count = max(natural_line_count, len(layout_lines))
+
+        rendered_metrics = measurer.measure_wrapped(
+            lines=layout_lines,
+            font_height_dots=font_h,
+            font_width_dots=font_w,
+            line_spacing_dots=line_spacing,
+        ) if isinstance(measurer, ZplMeasuredTextMeasurer) else measurer.estimate(
+            text='\n'.join(layout_lines),
+            box_width_dots=rect.w,
+            font_height_dots=font_h,
+            font_width_dots=font_w,
+            wrap='none',
+            line_spacing_dots=line_spacing,
+        )
+
+        diagnostic_kwargs = {
+            'element_id': element.id,
+            'leaf_alias': leaf_alias,
+            'actual_lines': natural_line_count,
+            'max_lines': None if max_lines == 9999 else max_lines,
+        }
+        if max_lines < 9999 and natural_line_count > max_lines:
+            if fit == 'wrap':
+                diagnostics.append(CompilationDiagnostic(
+                    code='text_max_lines_exceeded',
+                    message=f'Text wraps to {natural_line_count} lines; max_lines is {max_lines}. All lines are rendered without overlap. Increase max_lines or use truncate/shrink_to_fit.',
+                    **diagnostic_kwargs,
+                ))
+            elif fit == 'truncate':
+                diagnostics.append(CompilationDiagnostic(
+                    code='text_truncated',
+                    message=f'Text wraps to {natural_line_count} lines and is truncated to {max_lines}.',
+                    **diagnostic_kwargs,
+                ))
+            elif fit == 'shrink_to_fit':
+                diagnostics.append(CompilationDiagnostic(
+                    code='text_cannot_fit',
+                    message=f'Text still needs {natural_line_count} lines after shrinking; max_lines is {max_lines}.',
+                    **diagnostic_kwargs,
+                ))
+
+        if rendered_metrics.height_dots > rect.h:
+            diagnostics.append(CompilationDiagnostic(
+                code='text_height_overflow',
+                message=f'Text is {rendered_metrics.height_dots} dots high but its area is only {rect.h} dots high.',
+                **diagnostic_kwargs,
+            ))
+
+        content_h = rendered_metrics.height_dots
+        box_y = rect.y
+        if align_v == 'center':
+            box_y = rect.y + max(0, (rect.h - content_h) // 2)
+        elif align_v == 'bottom':
+            box_y = rect.y + max(0, rect.h - content_h)
+
+        for line_index, line in enumerate(layout_lines):
+            line_metrics = measurer.measure_wrapped(
+                lines=[line],
+                font_height_dots=font_h,
+                font_width_dots=font_w,
+                line_spacing_dots=0,
+            ) if isinstance(measurer, ZplMeasuredTextMeasurer) else measurer.estimate(
+                text=line,
+                box_width_dots=max(1, rect.w),
+                font_height_dots=font_h,
+                font_width_dots=font_w,
+                wrap='none',
+                line_spacing_dots=0,
+            )
+            if line_metrics.width_dots > rect.w:
+                diagnostics.append(CompilationDiagnostic(
+                    code='text_width_overflow',
+                    message=f'Line {line_index + 1} is {line_metrics.width_dots} dots wide but its area is only {rect.w} dots wide.',
+                    **diagnostic_kwargs,
+                ))
+            # Font 0 is proportional, so the conservative offline width used
+            # for wrapping is not accurate enough for optical centering. Let
+            # the printer align one already-wrapped line when it is known to
+            # fit. A one-line ^FB ending in \& cannot perform a second
+            # multi-line wrap or overwrite a later line.
+            use_printer_alignment = align_h in ('center', 'right') and line_metrics.width_dots <= rect.w
+            box_x = rect.x
+            if not use_printer_alignment:
+                if align_h == 'center':
+                    box_x += max(0, (rect.w - line_metrics.width_dots) // 2)
+                elif align_h == 'right':
+                    box_x += max(0, rect.w - line_metrics.width_dots)
+
+            z.field_origin(box_x, box_y + line_index * (font_h + line_spacing))
+            z.font_a0(height=font_h, width=font_w)
+            if use_printer_alignment:
+                z.field_block(
+                    width=max(1, rect.w),
+                    max_lines=1,
+                    line_spacing=0,
+                    justification='C' if align_h == 'center' else 'R',
+                    hanging_indent=0,
                 )
-            else:
-                metrics = measurer.estimate(
-                    text=raw_text,
-                    box_width_dots=rect.w,
-                    font_height_dots=font_h,
-                    font_width_dots=font_w,
-                    wrap=wrap_for_layout,
-                    line_spacing_dots=line_spacing,
-                )
-            content_h = metrics.height_dots
-            if align_v == 'center':
-                box_y = rect.y + max(0, (rect.h - content_h) // 2)
-            else:
-                box_y = rect.y + max(0, rect.h - content_h)
+            field_text = f'{line}\\&' if use_printer_alignment else line
+            needs_hex, encoded = encode_field_data(field_text, hex_indicator='_', encoding='utf-8')
+            if needs_hex:
+                z.field_hex('_')
+            z.field_data(encoded)
+            z.field_separator()
 
-        text = raw_text.replace('\n', '\\&')
-        if layout_lines is not None:
-            text = '\\&'.join(layout_lines)
-
-        z.field_origin(box_x, box_y)
-        z.font_a0(height=font_h, width=font_w)
-
-        if wrap != 'none' or fit in ('wrap', 'truncate', 'shrink_to_fit'):
-            width = max(1, rect.w)
-            fb_max_lines = max_lines
-            if fit == 'shrink_to_fit' and explicit_lines_overflow:
-                fb_max_lines = explicit_line_count
-            if fit == 'overflow':
-                fb_max_lines = 9999
-            z.field_block(width=width, max_lines=fb_max_lines, line_spacing=line_spacing, justification=justification, hanging_indent=0)
-
-        needs_hex, encoded = encode_field_data(text, hex_indicator='_', encoding='utf-8')
-        if needs_hex:
-            z.field_hex('_')
-        z.field_data(encoded)
-        z.field_separator()
+        return diagnostics
 
     def _shrink_text(
         self,
@@ -650,7 +741,7 @@ class Compiler:
         self,
         z: ZplBuilder,
         *,
-        element: ImageElement,
+        element: ImageElement | ImageBackground,
         rect,
         variables: Mapping[str, Any],
         render_opts: RenderOptions,

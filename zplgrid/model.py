@@ -142,9 +142,23 @@ class ImageElement(Element):
 
 
 @dataclass(frozen=True)
+class ImageBackground:
+    source: ImageSource
+    fit: Optional[str] = None
+    align_h: Optional[str] = None
+    align_v: Optional[str] = None
+    input_dpi: Optional[int] = None
+    threshold: Optional[int] = None
+    dither: Optional[str] = None
+    invert: Optional[bool] = None
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Node:
     kind: str
     alias: Optional[str] = None
+    background: Optional[ImageBackground] = None
     extensions: dict[str, Any] = field(default_factory=dict)
 
 

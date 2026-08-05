@@ -49,6 +49,10 @@ def _validate_against_jsonschema(raw: Mapping[str, Any]) -> list[TemplateIssue]:
 def _validate_node(node: Mapping[str, Any], *, issues: list[TemplateIssue], path: str, seen_aliases: set[str]) -> None:
     kind = node['kind']
 
+    background = node.get('background')
+    if isinstance(background, Mapping):
+        _validate_element({'type': 'image', **background}, issues=issues, path=f'{path}.background')
+
     alias = node.get('alias')
     if alias is not None:
         if alias in seen_aliases:

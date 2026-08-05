@@ -192,7 +192,7 @@ def test_labelary_grid_layout_with_dividers() -> None:
     assert zpl.count("^GB") >= 2
 
 
-def test_labelary_split_overflow_multiline() -> None:
+def test_labelary_split_overflow_multiline_does_not_use_field_block() -> None:
     template = {
         "schema_version": 1,
         "name": "split_overflow_multiline",
@@ -224,7 +224,7 @@ def test_labelary_split_overflow_multiline() -> None:
         },
     }
     zpl = _compile_and_render(template, "split_overflow_multiline", variables=DEFAULT_VARS, debug=True)
-    assert "^FB" in zpl
+    assert "^FB" not in zpl
 
 
 WRAP_SPLIT_CASES = [

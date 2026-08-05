@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 from .exceptions import LayoutError
-from .model import LeafNode, Node, Rect, SplitNode
+from .model import ImageBackground, LeafNode, Node, Rect, SplitNode
 from .units import mm_to_dots
+
+
+@dataclass(frozen=True)
+class NodeBackgroundLayout:
+    node_id: str
+    background: ImageBackground
+    rect: Rect
 
 
 @dataclass(frozen=True)
@@ -31,6 +38,7 @@ class LeafLayout:
 @dataclass(frozen=True)
 class LayoutResult:
     node_rects: Mapping[str, Rect]
+    backgrounds: tuple[NodeBackgroundLayout, ...]
     leaves: tuple[LeafLayout, ...]
     dividers: tuple[SplitDividerLayout, ...]
     gutters: tuple[GutterGuideLayout, ...]
@@ -39,6 +47,7 @@ class LayoutResult:
 
 def compute_layout(root: Node, *, width_dots: int, height_dots: int, dpi: int) -> LayoutResult:
     node_rects: dict[str, Rect] = {}
+    backgrounds: list[NodeBackgroundLayout] = []
     leaves: list[LeafLayout] = []
     dividers: list[SplitDividerLayout] = []
     gutters: list[GutterGuideLayout] = []
@@ -51,6 +60,7 @@ def compute_layout(root: Node, *, width_dots: int, height_dots: int, dpi: int) -
         rect=root_rect,
         dpi=dpi,
         node_rects=node_rects,
+        backgrounds=backgrounds,
         leaves=leaves,
         dividers=dividers,
         gutters=gutters,
@@ -58,6 +68,7 @@ def compute_layout(root: Node, *, width_dots: int, height_dots: int, dpi: int) -
     )
     return LayoutResult(
         node_rects=node_rects,
+        backgrounds=tuple(backgrounds),
         leaves=tuple(leaves),
         dividers=tuple(dividers),
         gutters=tuple(gutters),
@@ -72,12 +83,15 @@ def _walk(
     rect: Rect,
     dpi: int,
     node_rects: dict[str, Rect],
+    backgrounds: list[NodeBackgroundLayout],
     leaves: list[LeafLayout],
     dividers: list[SplitDividerLayout],
     gutters: list[GutterGuideLayout],
     alias_to_id: dict[str, str],
 ) -> None:
     node_rects[node_id] = rect
+    if node.background is not None:
+        backgrounds.append(NodeBackgroundLayout(node_id=node_id, background=node.background, rect=rect))
     if node.alias:
         alias_to_id[node.alias] = node_id
 
@@ -113,8 +127,8 @@ def _walk(
             thickness = mm_to_dots(node.divider.thickness_mm, dpi)
             line_x = rect.x + child0_w + (gutter - thickness) // 2
             dividers.append(SplitDividerLayout(rect=Rect(x=line_x, y=rect.y, w=thickness, h=rect.h), thickness=thickness))
-        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
-        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
         return
 
     if node.direction == 'h':
@@ -132,8 +146,8 @@ def _walk(
             thickness = mm_to_dots(node.divider.thickness_mm, dpi)
             line_y = rect.y + child0_h + (gutter - thickness) // 2
             dividers.append(SplitDividerLayout(rect=Rect(x=rect.x, y=line_y, w=rect.w, h=thickness), thickness=thickness))
-        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
-        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
         return
 
     raise LayoutError(f'invalid split direction at {node_id}: {node.direction!r}')

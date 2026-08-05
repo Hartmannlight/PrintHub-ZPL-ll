@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from zplgrid import LabelTarget
 from zplgrid.compiler import Compiler
 from zplgrid.measure import TextMetrics, ZplMeasuredTextMeasurer
@@ -69,6 +67,13 @@ def _compile_with_measurer(template: dict, measurer: FakeMeasuredTextMeasurer) -
     return compiler.compile(tmpl, target=target, variables={}, debug=False)
 
 
+def _compile_result(template: dict, measurer: FakeMeasuredTextMeasurer):
+    target = LabelTarget(width_mm=50.0, height_mm=20.0, dpi=203)
+    compiler = Compiler(text_measurer=measurer)
+    tmpl = load_template(template)
+    return compiler.compile_with_diagnostics(tmpl, target=target, variables={}, debug=False)
+
+
 def test_wrap_word_inserts_line_breaks() -> None:
     measurer = FakeMeasuredTextMeasurer(
         {
@@ -88,7 +93,10 @@ def test_wrap_word_inserts_line_breaks() -> None:
         },
     }
     zpl = _compile_with_measurer(template, measurer)
-    assert "^FDONE\\&TWO\\&THREE" in zpl
+    assert "^FDONE" in zpl
+    assert "^FDTWO" in zpl
+    assert "^FDTHREE" in zpl
+    assert "^FB" not in zpl
 
 
 def test_wrap_char_inserts_char_breaks() -> None:
@@ -111,10 +119,13 @@ def test_wrap_char_inserts_char_breaks() -> None:
     }
     zpl = _compile_with_measurer(template, measurer)
     assert "^FD" in zpl
-    assert "A\\&B\\&C" in zpl
+    assert "^FDA" in zpl
+    assert "^FDB" in zpl
+    assert "^FDC" in zpl
+    assert "^FB" not in zpl
 
 
-def test_fit_wrap_preserves_all_lines_but_respects_max_lines_in_fb() -> None:
+def test_fit_wrap_preserves_all_lines_and_reports_max_lines_overflow() -> None:
     measurer = FakeMeasuredTextMeasurer(
         {"word": ["L1", "L2", "L3"]}
     )
@@ -128,9 +139,12 @@ def test_fit_wrap_preserves_all_lines_but_respects_max_lines_in_fb() -> None:
             ],
         },
     }
-    zpl = _compile_with_measurer(template, measurer)
-    assert "^FDL1\\&L2\\&L3" in zpl
-    assert re.search(r"\^FB\d+,2,", zpl) is not None
+    result = _compile_result(template, measurer)
+    assert "^FDL1" in result.zpl
+    assert "^FDL2" in result.zpl
+    assert "^FDL3" in result.zpl
+    assert "^FB" not in result.zpl
+    assert [item.code for item in result.diagnostics] == ["text_max_lines_exceeded"]
 
 
 def test_fit_truncate_limits_lines() -> None:
@@ -148,9 +162,10 @@ def test_fit_truncate_limits_lines() -> None:
         },
     }
     zpl = _compile_with_measurer(template, measurer)
-    assert "^FDL1\\&L2" in zpl
+    assert "^FDL1" in zpl
+    assert "^FDL2" in zpl
     assert "L3" not in zpl
-    assert re.search(r"\^FB\d+,2,", zpl) is not None
+    assert "^FB" not in zpl
 
 
 def test_fit_overflow_with_wrap_none_emits_no_fb() -> None:
@@ -167,3 +182,29 @@ def test_fit_overflow_with_wrap_none_emits_no_fb() -> None:
     }
     zpl = _compile_with_measurer(template, measurer)
     assert "^FB" not in zpl
+
+
+def test_centered_lines_use_independent_single_line_field_blocks() -> None:
+    measurer = FakeMeasuredTextMeasurer({"word": ["FIRST", "SECOND"]})
+    template = {
+        "schema_version": 1,
+        "name": "centered_lines",
+        "layout": {
+            "kind": "leaf",
+            "elements": [{
+                "type": "text",
+                "text": "ignore",
+                "wrap": "word",
+                "fit": "shrink_to_fit",
+                "max_lines": 2,
+                "align_h": "center",
+            }],
+        },
+    }
+
+    zpl = _compile_with_measurer(template, measurer)
+
+    assert zpl.count("^FB") == 2
+    assert zpl.count(",1,0,C,0") == 2
+    assert "^FDFIRST\\&" in zpl
+    assert "^FDSECOND\\&" in zpl
