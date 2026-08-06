@@ -77,7 +77,18 @@
       "additionalProperties": false,
       "required": ["loaded"],
       "properties": {
-        "loaded": { "$ref": "#/$defs/media_loaded" }
+        "loaded": { "$ref": "#/$defs/media_loaded" },
+        "dynamic_source": { "$ref": "#/$defs/media_dynamic_source" }
+      }
+    },
+    "media_dynamic_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "url"],
+      "properties": {
+        "kind": { "const": "zpl_emulator_settings" },
+        "url": { "type": "string", "minLength": 1 },
+        "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 10000 }
       }
     },
     "media_loaded": {

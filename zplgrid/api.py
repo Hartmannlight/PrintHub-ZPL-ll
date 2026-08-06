@@ -19,6 +19,7 @@ from .macros import MacroContext, build_macro_variables, collect_template_placeh
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
 from .printer_io import apply_printer_settings, dispatch_zpl, query_raw_command
+from .printer_media import resolve_dynamic_printer_media
 from .printers_config import load_printers_config, save_printers_config
 from .print_drafts_store import load_print_draft, save_print_draft
 from .print_jobs_store import (
@@ -346,8 +347,9 @@ def _ensure_printer_supports_status(printer: Mapping[str, Any]) -> None:
 
 
 def _printer_target(printer: Mapping[str, Any]) -> RenderTarget:
-    media_loaded = (printer.get('media') or {}).get('loaded') or {}
-    alignment = printer.get('alignment') or {}
+    resolved = resolve_dynamic_printer_media(printer)
+    media_loaded = (resolved.get('media') or {}).get('loaded') or {}
+    alignment = resolved.get('alignment') or {}
     try:
         width_mm = float(media_loaded['width_mm'])
         height_mm = float(media_loaded['height_mm'])
@@ -1028,7 +1030,11 @@ def get_template_preview(template_id: str) -> Response:
 def get_printers() -> PrintersConfigResponse:
     config = getattr(app.state, 'printers_config', None) or load_printers_config()
     app.state.printers_config = config
-    return PrintersConfigResponse(**config)
+    resolved = {
+        **config,
+        'printers': [resolve_dynamic_printer_media(printer) for printer in config.get('printers', [])],
+    }
+    return PrintersConfigResponse(**resolved)
 
 
 @app.get("/v1/zebra-tamer/agents")
@@ -1049,7 +1055,7 @@ def get_printer(printer_id: str) -> dict[str, Any]:
     app.state.printers_config = config
     for printer in config.get('printers', []):
         if printer.get('id') == printer_id:
-            return printer
+            return resolve_dynamic_printer_media(printer)
     raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}')
 
 
