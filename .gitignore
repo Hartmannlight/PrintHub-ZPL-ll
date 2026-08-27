@@ -3,3 +3,5 @@ artifacts/
 /tests/_renders/
 __pycache__/
 *.py[cod]
+configs/*.sqlite3*
+.pytest_cache/

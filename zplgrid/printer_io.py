@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -14,7 +15,11 @@ class PrintDispatchResult:
     job_state: str | None = None
 
 
-def apply_printer_settings(zpl: str, printer: Mapping[str, Any]) -> str:
+def apply_printer_settings(zpl: str, printer: Mapping[str, Any], *, generated: bool = False) -> str:
+    if generated and (printer.get('connection') or {}).get('protocol') == 'zebra_tamer':
+        # Only remove our compiler's exact leading size header. Explicit raw ZPL
+        # remains untouched. Layout dimensions still come from the agent's media.
+        zpl = re.sub(r'\A\^XA\n\^PW[0-9]+\n\^LL[0-9]+\n', '^XA\n', zpl, count=1)
     settings = _build_print_settings(printer)
     if not settings:
         return zpl
@@ -109,6 +114,8 @@ def query_raw_command(printer: Mapping[str, Any], command: str) -> str:
 
 def _build_print_settings(printer: Mapping[str, Any]) -> list[str]:
     zpl_cfg = printer.get('zpl') or {}
+    if (printer.get('connection') or {}).get('protocol') == 'zebra_tamer':
+        zpl_cfg = {}  # ZebraTamer owns device configuration, including legacy registry entries.
     defaults = printer.get('defaults') or {}
     settings: list[str] = []
 

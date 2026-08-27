@@ -6,6 +6,8 @@ import math
 from typing import Any, Callable, Mapping
 from urllib.request import Request, urlopen
 
+from .zebra_tamer import get_configuration
+
 
 JsonReader = Callable[[str, float], Mapping[str, Any]]
 
@@ -27,6 +29,8 @@ def resolve_dynamic_printer_media(
     """Return a printer copy hydrated with live media, falling back to configured values."""
 
     resolved = deepcopy(dict(printer))
+    if (resolved.get('connection') or {}).get('protocol') == 'zebra_tamer':
+        return _resolve_zebra_tamer(resolved)
     media = resolved.get("media")
     if not isinstance(media, dict):
         return resolved
@@ -58,4 +62,42 @@ def resolve_dynamic_printer_media(
         alignment = {}
         resolved["alignment"] = alignment
     alignment["dpi"] = round(dpmm * 25.4)
+    return resolved
+
+
+def _resolve_zebra_tamer(resolved: dict[str, Any]) -> dict[str, Any]:
+    # Imported registry values remain archival only. Never present a second copy
+    # of the loaded media as authoritative when the agent is unreachable.
+    media = resolved.setdefault('media', {})
+    media['loaded'] = None
+    media['authority'] = {'source': 'zebra_tamer', 'state': 'unavailable'}
+    resolved['zpl'] = {}
+    alignment = resolved.setdefault('alignment', {})
+    alignment.update(dpi=None, offset_x_mm=0, offset_y_mm=0)
+    try:
+        payload = get_configuration(resolved['connection'])
+        state = payload['media'].get('state')
+        device = payload['device']
+        observation = device.get('observation') or {}
+        dpi = observation.get('resolution_dpi') or (device.get('profile') or {}).get('resolution_dpi')
+        if dpi is not None:
+            dpi = int(dpi)
+            if dpi <= 0:
+                raise ValueError('Invalid ZebraTamer resolution')
+        alignment['dpi'] = dpi
+        media['authority']['state'] = 'loaded' if state else 'not_configured'
+        resolved['zebra_tamer'] = {'webui_enabled': bool(payload.get('webui_enabled')), 'device': device}
+        if not state:
+            return resolved
+        definition = state['media']
+        width, height = float(definition['width_mm']), float(definition['height_mm'])
+        if not all(math.isfinite(n) and n > 0 for n in (width, height)):
+            raise ValueError('Invalid ZebraTamer media dimensions')
+        color = definition['color']
+        media['loaded'] = {'width_mm': width, 'height_mm': height, 'color': color['name'],
+                           'color_hex': color.get('hex'), 'type': definition['print_technology']}
+        media['agent_state'] = state
+    except (RuntimeError, OSError, KeyError, TypeError, ValueError) as exc:
+        media['loaded'] = None
+        media['authority'] = {'source': 'zebra_tamer', 'state': 'unavailable', 'error': str(exc)}
     return resolved

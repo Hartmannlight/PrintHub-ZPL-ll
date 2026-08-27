@@ -59,7 +59,8 @@
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "timeout_ms": { "type": "integer", "minimum": 1 },
         "base_url": { "type": "string", "format": "uri", "pattern": "^https?://" },
-        "printer_id": { "type": "string", "minLength": 1 }
+        "printer_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" }
       },
       "oneOf": [
         {
@@ -115,7 +116,6 @@
     "zpl": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["darkness", "print_speed"],
       "properties": {
         "darkness": { "type": "integer", "minimum": 0 },
         "print_speed": { "type": "integer", "minimum": 0 },
@@ -128,7 +128,7 @@
       "required": ["copies", "rotation"],
       "properties": {
         "copies": { "type": "integer", "minimum": 1 },
-        "rotation": { "type": "integer", "minimum": 0, "maximum": 360 }
+        "rotation": { "enum": [0, 90, 180, 270] }
       }
     },
     "capabilities": {

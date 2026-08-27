@@ -4,6 +4,8 @@ import base64
 from dataclasses import asdict
 import json
 import os
+import logging
+import threading
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -11,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+import yaml
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
@@ -20,7 +23,8 @@ from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNod
 from .parser import load_template
 from .printer_io import apply_printer_settings, dispatch_zpl, query_raw_command
 from .printer_media import resolve_dynamic_printer_media
-from .printers_config import load_printers_config, save_printers_config
+from .printer_registry import PrinterRegistry, RegistryConflict, normalize_agent_url
+from .printer_discovery import discover_printers, inspect_agent
 from .print_drafts_store import load_print_draft, save_print_draft
 from .print_jobs_store import (
     create_job as create_stored_print_job,
@@ -31,7 +35,7 @@ from .print_jobs_store import (
 )
 from .render import RenderOptions, render_text
 from .templates_store import load_template_entry, list_templates, save_template_entry, update_template_entry
-from .zebra_tamer import discover_agent_urls, get_snapshot, list_agent_printers
+from .zebra_tamer import get_snapshot
 
 
 class RenderTarget(BaseModel):
@@ -49,9 +53,19 @@ class RenderRequest(BaseModel):
     debug: bool = False
 
 
+class RenderDiagnostic(BaseModel):
+    code: str
+    message: str
+    severity: str = "warning"
+    element_id: str | None = None
+    leaf_alias: str | None = None
+    actual_lines: int | None = None
+    max_lines: int | None = None
+
+
 class RenderResponse(BaseModel):
     zpl: str
-    diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    diagnostics: list[RenderDiagnostic] = Field(default_factory=list)
 
 
 load_dotenv()
@@ -78,15 +92,54 @@ def health() -> dict[str, str]:
 class PrintersConfigResponse(BaseModel):
     config_version: int
     printers: list[dict[str, Any]]
+    default_printer_id: str | None = None
 
 
 @app.on_event("startup")
 def _load_printers_config_on_startup() -> None:
     recover_interrupted_jobs()
     try:
-        app.state.printers_config = load_printers_config()
+        registry = PrinterRegistry()
+        registry.initialize()
+        app.state.printer_registry = registry
+        interval = max(0, float(os.getenv('ZPLGRID_DISCOVERY_INTERVAL_SECONDS', '30')))
+        if interval:
+            stopped = threading.Event()
+            app.state.discovery_stopped = stopped
+            def refresh_discovery() -> None:
+                while not stopped.wait(interval):
+                    try:
+                        discover_printers(registry)
+                    except Exception:
+                        logging.getLogger(__name__).exception('Printer discovery failed; registered inventory is retained')
+            worker = threading.Thread(target=refresh_discovery, name='printer-discovery', daemon=True)
+            app.state.discovery_worker = worker
+            worker.start()
     except ValueError as exc:
-        raise RuntimeError(f'Failed to load printers.yml: {exc}') from exc
+        raise RuntimeError(f'Failed to initialize printer registry (YAML was not modified): {exc}') from exc
+
+
+@app.on_event('shutdown')
+def stop_printer_discovery() -> None:
+    stopped = getattr(app.state, 'discovery_stopped', None)
+    if stopped:
+        stopped.set()
+        app.state.discovery_worker.join(timeout=1)
+
+
+def _registry() -> PrinterRegistry:
+    registry = getattr(app.state, 'printer_registry', None)
+    if registry is None:
+        registry = PrinterRegistry()
+        registry.initialize()
+        app.state.printer_registry = registry
+    return registry
+
+
+@app.exception_handler(RegistryConflict)
+async def registry_conflict_handler(_request, exc: RegistryConflict):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={'detail': str(exc)})
 
 
 def _assert_variables_present(template: Template, variables: Mapping[str, Any]) -> None:
@@ -327,12 +380,10 @@ class TemplateDetailResponse(BaseModel):
 
 
 def _get_printer(printer_id: str) -> dict[str, Any]:
-    config = getattr(app.state, 'printers_config', None) or load_printers_config()
-    app.state.printers_config = config
-    for printer in config.get('printers', []):
-        if printer.get('id') == printer_id:
-            return printer
-    raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}')
+    try:
+        return _registry().get(printer_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}') from None
 
 
 def _ensure_printer_enabled(printer: Mapping[str, Any]) -> None:
@@ -350,6 +401,8 @@ def _printer_target(printer: Mapping[str, Any]) -> RenderTarget:
     resolved = resolve_dynamic_printer_media(printer)
     media_loaded = (resolved.get('media') or {}).get('loaded') or {}
     alignment = resolved.get('alignment') or {}
+    if (printer.get('connection') or {}).get('protocol') == 'zebra_tamer' and (not media_loaded or not alignment.get('dpi')):
+        raise HTTPException(status_code=409, detail='Configure the loaded media and printer resolution in ZebraTamer first; agent values are unavailable or incomplete')
     try:
         width_mm = float(media_loaded['width_mm'])
         height_mm = float(media_loaded['height_mm'])
@@ -541,6 +594,13 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
     printer = _get_printer(printer_id)
     _ensure_printer_enabled(printer)
     zpl_with_settings = apply_printer_settings(payload.zpl, printer)
+    preview = None
+    if payload.return_preview:
+        # Validate/render before dispatch. A metadata error after sending would
+        # look like a failed print and could cause an unintended duplicate retry.
+        dpmm, width_in, height_in = _printer_labelary_args(printer)
+        preview = _render_preview_or_error(payload.zpl, dpmm=dpmm, width_in=width_in,
+                                           height_in=height_in, return_preview=True)
     try:
         dispatched = dispatch_zpl(printer, zpl_with_settings, description='Raw ZPL print')
     except ValueError as exc:
@@ -548,14 +608,6 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
     except (OSError, RuntimeError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    dpmm, width_in, height_in = _printer_labelary_args(printer)
-    preview = _render_preview_or_error(
-        payload.zpl,
-        dpmm=dpmm,
-        width_in=width_in,
-        height_in=height_in,
-        return_preview=payload.return_preview,
-    )
     return PrintResponse(
         printer_id=printer_id,
         bytes_sent=dispatched.bytes_sent,
@@ -642,7 +694,7 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         _assert_variables_present(template, variables)
         target = payload.target or _printer_target(printer)
         zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=payload.debug)
-        zpl_with_settings = apply_printer_settings(zpl, printer)
+        zpl_with_settings = apply_printer_settings(zpl, printer, generated=True)
         dispatched = dispatch_zpl(
             printer,
             zpl_with_settings,
@@ -1028,35 +1080,118 @@ def get_template_preview(template_id: str) -> Response:
 
 @app.get("/v1/printers", response_model=PrintersConfigResponse)
 def get_printers() -> PrintersConfigResponse:
-    config = getattr(app.state, 'printers_config', None) or load_printers_config()
-    app.state.printers_config = config
-    resolved = {
-        **config,
-        'printers': [resolve_dynamic_printer_media(printer) for printer in config.get('printers', [])],
-    }
-    return PrintersConfigResponse(**resolved)
+    printers = [resolve_dynamic_printer_media(printer) for printer in _registry().list()]
+    requested = os.getenv('ZPLGRID_DEFAULT_PRINTER_ID')
+    enabled = [p['id'] for p in printers if p.get('enabled', True)]
+    default = requested if requested in enabled else next(iter(enabled), None)
+    return PrintersConfigResponse(config_version=1, printers=printers, default_printer_id=default)
 
 
 @app.get("/v1/zebra-tamer/agents")
 def get_zebra_tamer_agents() -> dict[str, Any]:
-    agents: list[dict[str, Any]] = []
-    for base_url in discover_agent_urls():
-        try:
-            printers = list_agent_printers(base_url)
-            agents.append({"base_url": base_url, "available": True, "printers": printers})
-        except Exception as exc:
-            agents.append({"base_url": base_url, "available": False, "printers": [], "error": str(exc)})
-    return {"agents": agents}
+    return discover_printers(_registry())
+
+
+class AgentDiscoveryRequest(BaseModel):
+    base_url: str
+
+
+@app.post('/v1/zebra-tamer/discover')
+def discover_manual_agent(payload: AgentDiscoveryRequest) -> dict[str, Any]:
+    try:
+        return discover_printers(_registry(), [normalize_agent_url(payload.base_url)])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class PrinterRegistrationRequest(BaseModel):
+    base_url: str
+    printer_id: str
+    agent_id: str | None = None
+    name: str | None = None
+    width_mm: float | None = Field(default=None, gt=0)
+    height_mm: float | None = Field(default=None, gt=0)
+    dpi: int | None = Field(default=None, gt=0)
+
+
+@app.post('/v1/printers/register')
+def register_discovered_printer(payload: PrinterRegistrationRequest) -> dict[str, Any]:
+    try:
+        agent = inspect_agent(payload.base_url)
+        if payload.agent_id is not None and agent['agent_id'] != payload.agent_id:
+            raise RegistryConflict('Agent identity changed since discovery; refresh before registering')
+        remote = next((p for p in agent['printers'] if p['id'] == payload.printer_id), None)
+        if remote is None:
+            raise HTTPException(status_code=404, detail='Printer is no longer advertised by this agent')
+        existing = _registry().observe(agent['base_url'], payload.printer_id, agent['agent_id'])
+        if existing:
+            return existing  # Do not apply registration defaults to an existing printer.
+        connection = {'protocol': 'zebra_tamer', 'base_url': agent['base_url'], 'printer_id': payload.printer_id, 'timeout_ms': 10000}
+        if agent['agent_id']:
+            connection['agent_id'] = agent['agent_id']
+        live = resolve_dynamic_printer_media({'connection': connection, 'media': {}, 'alignment': {}})
+        loaded = live['media'].get('loaded')
+        dpi = live['alignment'].get('dpi')
+        if not loaded or not dpi:
+            raise HTTPException(status_code=409, detail='Set up media and resolution in ZebraTamer before registering this printer')
+        printer = {'id': 'pending', 'name': payload.name or remote.get('display_name') or payload.printer_id,
+                   'model': 'Zebra via ZebraTamer', 'vendor': 'Zebra', 'driver': 'zpl', 'connection': connection,
+                   'media': {'loaded': {key: loaded[key] for key in ('width_mm', 'height_mm', 'color', 'type')}},
+                   'alignment': {'dpi': dpi, 'offset_x_mm': 0, 'offset_y_mm': 0},
+                   'zpl': {}, 'defaults': {'copies': 1, 'rotation': 0},
+                   'capabilities': {'supports_status': True, 'supports_graphics': True, 'supports_cut': False}, 'enabled': True}
+        return _registry().register(printer)
+    except RegistryConflict:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get('/v1/printer-registry/export')
+def export_printers() -> Response:
+    return Response(yaml.safe_dump(_registry().export(), sort_keys=False, allow_unicode=True),
+                    media_type='application/yaml', headers={'Content-Disposition': 'attachment; filename="printers.yml"'})
+
+
+@app.post('/v1/printer-registry/import', response_model=PrintersConfigResponse)
+def import_printers(payload: dict[str, Any]) -> PrintersConfigResponse:
+    try:
+        _registry().import_config(payload)
+    except RegistryConflict:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return get_printers()
 
 
 @app.get("/v1/printers/{printer_id}")
 def get_printer(printer_id: str) -> dict[str, Any]:
-    config = getattr(app.state, 'printers_config', None) or load_printers_config()
-    app.state.printers_config = config
-    for printer in config.get('printers', []):
-        if printer.get('id') == printer_id:
-            return resolve_dynamic_printer_media(printer)
-    raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}')
+    return resolve_dynamic_printer_media(_get_printer(printer_id))
+
+
+class PrinterSettingsRequest(BaseModel):
+    revision: int = Field(ge=1)
+    settings: dict[str, Any]
+
+
+@app.get('/v1/printers/{printer_id}/configuration')
+def get_printer_configuration(printer_id: str) -> dict[str, Any]:
+    """Stored settings for editing, without hydration from live media sources."""
+    return _get_printer(printer_id)
+
+
+@app.patch('/v1/printers/{printer_id}')
+def patch_printer(printer_id: str, payload: PrinterSettingsRequest) -> dict[str, Any]:
+    try:
+        return _registry().patch(printer_id, payload.settings, payload.revision)
+    except RegistryConflict:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=404, detail='Printer not found') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.put("/v1/printers/{printer_id}")
@@ -1070,25 +1205,11 @@ def upsert_printer(printer_id: str, payload: dict[str, Any]) -> PrintersConfigRe
     printer = dict(payload)
     printer['id'] = printer_id
 
-    config = getattr(app.state, 'printers_config', None) or load_printers_config()
-    printers = list(config.get('printers', []))
-    replaced = False
-    for idx, existing in enumerate(printers):
-        if existing.get('id') == printer_id:
-            printers[idx] = printer
-            replaced = True
-            break
-    if not replaced:
-        printers.append(printer)
-
-    updated = {
-        'config_version': config.get('config_version', 1),
-        'printers': printers,
-    }
     try:
-        save_printers_config(updated)
+        _registry().create(printer)
+    except RegistryConflict:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    app.state.printers_config = updated
-    return PrintersConfigResponse(**updated)
+    return get_printers()

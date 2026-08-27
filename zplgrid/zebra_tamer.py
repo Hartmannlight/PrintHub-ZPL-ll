@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
@@ -59,6 +60,7 @@ def submit_zpl(
     description: str | None = None,
     label_count: int | None = None,
 ) -> ZebraTamerJob:
+    verify_agent_identity(connection)
     payload = zpl.encode("utf-8")
     headers = {
         "Content-Type": "application/zpl",
@@ -84,6 +86,7 @@ def submit_zpl(
 
 
 def get_snapshot(connection: Mapping[str, Any]) -> dict[str, Any]:
+    verify_agent_identity(connection)
     url = f"{_base_url(connection)}/v1/printers/{_agent_printer_id(connection)}/snapshot"
     try:
         response = requests.get(url, timeout=_timeout(connection))
@@ -118,6 +121,40 @@ def configured_agent_urls(extra: Iterable[str] = ()) -> list[str]:
     return result
 
 
+def get_agent_info(base_url: str, timeout_s: float = 2.0) -> dict[str, Any]:
+    try:
+        response = requests.get(f'{_base_url({"base_url": base_url})}/v1/agent', timeout=timeout_s)
+    except requests.RequestException as exc:
+        raise RuntimeError(f'ZebraTamer is unavailable: {exc}') from exc
+    data = _unwrap(response)
+    if not isinstance(data, dict):
+        raise RuntimeError('ZebraTamer returned invalid agent information')
+    agent_id = data.get('agent_id')
+    if agent_id is not None and (not isinstance(agent_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', agent_id)):
+        raise RuntimeError('ZebraTamer returned an invalid agent_id')
+    return data
+
+
+def get_configuration(connection: Mapping[str, Any]) -> dict[str, Any]:
+    """Read authoritative media and observed device values without triggering printer I/O."""
+    verify_agent_identity(connection)
+    url = f"{_base_url(connection)}/v1/printers/{_agent_printer_id(connection)}/configuration"
+    try:
+        response = requests.get(url, timeout=min(2.0, _timeout(connection)))
+    except requests.RequestException as exc:
+        raise RuntimeError(f"ZebraTamer is unavailable: {exc}") from exc
+    data = _unwrap(response)
+    if not isinstance(data, dict) or not isinstance(data.get('media'), dict) or not isinstance(data.get('device'), dict):
+        raise RuntimeError('ZebraTamer configuration API is unavailable; update ZebraTamer')
+    return data
+
+
+def verify_agent_identity(connection: Mapping[str, Any]) -> None:
+    expected = connection.get('agent_id')
+    if expected and get_agent_info(_base_url(connection)).get('agent_id') != expected:
+        raise RuntimeError('Agent identity mismatch; refusing to communicate with a different printer agent')
+
+
 def discover_agent_urls(timeout_s: float = 0.8) -> list[str]:
     """Discover ZebraTamer agents via their `_zpl-agent._tcp.local.` announcement.
 
@@ -139,9 +176,11 @@ def discover_agent_urls(timeout_s: float = 0.8) -> list[str]:
             addresses = info.parsed_scoped_addresses()
             if not addresses:
                 return
-            url = f"http://{addresses[0]}:{info.port}"
-            if url not in found:
-                found.append(url)
+            for address in addresses:
+                host = f'[{address}]' if ':' in address else address
+                url = f"http://{host}:{info.port}"
+                if url not in found:
+                    found.append(url)
 
         def update_service(self, zeroconf: Any, service_type: str, name: str) -> None:
             self.add_service(zeroconf, service_type, name)
@@ -149,12 +188,17 @@ def discover_agent_urls(timeout_s: float = 0.8) -> list[str]:
         def remove_service(self, zeroconf: Any, service_type: str, name: str) -> None:
             return
 
-    zeroconf = Zeroconf()
+    try:
+        zeroconf = Zeroconf()
+    except OSError:
+        return found
     try:
         ServiceBrowser(zeroconf, "_zpl-agent._tcp.local.", Listener())
         import time
 
         time.sleep(timeout_s)
+    except OSError:
+        pass  # Explicit and previously registered URLs still work without multicast.
     finally:
         zeroconf.close()
     return found
