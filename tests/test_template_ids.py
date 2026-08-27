@@ -20,7 +20,9 @@ def test_template_id_validation_rejects_path_like_ids() -> None:
         raise AssertionError(f"Expected invalid template id: {template_id}")
 
 
-def test_template_detail_rejects_invalid_template_id() -> None:
+def test_template_detail_rejects_invalid_template_id(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "print-jobs"))
+    monkeypatch.setenv("ZPLGRID_DISCOVERY_INTERVAL_SECONDS", "0")
     with TestClient(app) as client:
         response = client.get("/v1/templates/bad_id")
 
