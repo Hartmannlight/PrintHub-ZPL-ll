@@ -74,6 +74,9 @@
           "allOf": [
             {
               "if": {
+                "required": [
+                  "fit"
+                ],
                 "properties": {
                 "fit": {
                     "enum": [
@@ -97,6 +100,9 @@
             },
             {
               "if": {
+                "required": [
+                  "fit"
+                ],
                 "properties": {
                   "fit": {
                     "enum": [
@@ -123,6 +129,9 @@
             },
             {
               "if": {
+                "required": [
+                  "wrap"
+                ],
                 "properties": {
                 "wrap": {
                     "enum": [
@@ -517,6 +526,9 @@
       "allOf": [
         {
           "if": {
+            "required": [
+              "fit"
+            ],
             "properties": {
                 "fit": {
                   "enum": [
@@ -540,6 +552,9 @@
         },
         {
           "if": {
+            "required": [
+              "fit"
+            ],
             "properties": {
               "fit": {
                 "enum": [
@@ -566,6 +581,9 @@
         },
         {
           "if": {
+            "required": [
+              "wrap"
+            ],
             "properties": {
                 "wrap": {
                   "enum": [
@@ -710,6 +728,9 @@
       "allOf": [
         {
           "if": {
+            "required": [
+              "input_mode"
+            ],
             "properties": {
                 "input_mode": {
                     "enum": [

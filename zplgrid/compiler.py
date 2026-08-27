@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import base64
 import io
 import os
@@ -41,7 +41,13 @@ class CompilationResult:
 
 @dataclass
 class Compiler:
-    text_measurer: TextMeasurer = ZplMeasuredTextMeasurer()
+    # Compilation must be deterministic and must not turn one text field into
+    # dozens of external requests merely because LABELARY_ENABLE is set for
+    # final preview rendering. Network measurement remains available when a
+    # caller explicitly injects an enabled measurer.
+    text_measurer: TextMeasurer = field(
+        default_factory=lambda: ZplMeasuredTextMeasurer(enable_network=False),
+    )
 
     def compile(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> str:
         return self.compile_with_diagnostics(
@@ -193,13 +199,17 @@ class Compiler:
 
         measurer = self._text_measurer_for_dpi(dpi)
         if fit == 'shrink_to_fit':
+            # Explicit newlines are hard layout constraints. Shrinking cannot
+            # turn three paragraphs into two lines, so do not destroy
+            # readability by shrinking toward one dot solely for that target.
+            shrink_max_lines = max(max_lines, len(raw_text.split('\n')))
             font_h, font_w = self._shrink_text(
                 text=raw_text,
                 rect=rect,
                 font_h=font_h,
                 font_w=font_w,
                 wrap=wrap,
-                max_lines=max_lines,
+                max_lines=shrink_max_lines,
                 line_spacing=line_spacing,
                 measurer=measurer,
             )
@@ -243,6 +253,29 @@ class Compiler:
             'actual_lines': natural_line_count,
             'max_lines': None if max_lines == 9999 else max_lines,
         }
+        known_font_chars = ZplMeasuredTextMeasurer._FALLBACK_GLYPH_WIDTHS
+        unreliable_chars = sorted({
+            char
+            for char in raw_text
+            if char != '\n'
+            and (char == '\\' or char not in known_font_chars)
+        })
+        if unreliable_chars:
+            display_chars = ', '.join(repr(char) for char in unreliable_chars)
+            diagnostics.append(CompilationDiagnostic(
+                code='text_unsupported_glyph',
+                message=(
+                    'Zebra built-in font 0 cannot reliably render these characters: '
+                    f'{display_chars}. They may be omitted or substituted; use supported text or a downloaded font.'
+                ),
+                **diagnostic_kwargs,
+            ))
+        if not z.emit_ci28 and any(ord(char) > 127 for char in raw_text):
+            diagnostics.append(CompilationDiagnostic(
+                code='text_utf8_disabled',
+                message='Text contains non-ASCII characters, but render.emit_ci28 is disabled. Enable it for UTF-8 output.',
+                **diagnostic_kwargs,
+            ))
         if max_lines < 9999 and natural_line_count > max_lines:
             if fit == 'wrap':
                 diagnostics.append(CompilationDiagnostic(

@@ -1,4 +1,4 @@
-import importlib.util
+import sys
 
 import pytest
 
@@ -21,9 +21,8 @@ def _base_template(element):
     }
 
 
-def test_qr_image_mode_requires_segno():
-    if importlib.util.find_spec('segno') is not None:
-        pytest.skip('segno is installed in this environment')
+def test_qr_image_mode_requires_segno(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'segno', None)
     template = _base_template(
         {
             'type': 'qr',
@@ -36,7 +35,8 @@ def test_qr_image_mode_requires_segno():
         compile_zpl(template, target=LabelTarget(width_mm=20.0, height_mm=20.0, dpi=203))
 
 
-def test_datamatrix_image_mode_requires_pylibdmtx():
+def test_datamatrix_image_mode_requires_pylibdmtx(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'pylibdmtx', None)
     template = _base_template(
         {
             'type': 'datamatrix',

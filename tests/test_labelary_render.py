@@ -207,8 +207,8 @@ def test_labelary_split_overflow_multiline_does_not_use_field_block() -> None:
                     "kind": "leaf",
                     "elements": [
                         _text_element(
-                            text="Overflow {name} " * 12,
-                            wrap="word",
+                            text="\n".join(f"Overflow {{name}} {index}" for index in range(12)),
+                            wrap="none",
                             fit="overflow",
                             max_lines=3,
                             align_h="left",

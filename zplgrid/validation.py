@@ -24,14 +24,17 @@ def _validate_against_jsonschema(raw: Mapping[str, Any]) -> list[TemplateIssue]:
         import json
         import importlib.resources as resources
         from jsonschema import Draft202012Validator
-    except Exception:
-        return []
+    except Exception as exc:
+        return [TemplateIssue(path='$', message=f'template schema validator is unavailable: {exc}')]
 
     try:
-        schema_text = resources.files('zplgrid.schemas').joinpath('zplgrid_template_v1.schema.json').read_text(encoding='utf-8')
+        # ``utf-8-sig`` accepts both ordinary UTF-8 and the BOM-prefixed schema
+        # shipped by earlier versions. A decode failure must not silently turn
+        # all template validation off.
+        schema_text = resources.files('zplgrid.schemas').joinpath('zplgrid_template_v1.schema.json').read_text(encoding='utf-8-sig')
         schema = json.loads(schema_text)
-    except Exception:
-        return []
+    except Exception as exc:
+        return [TemplateIssue(path='$', message=f'failed to load template schema: {exc}')]
 
     validator = Draft202012Validator(schema)
     issues: list[TemplateIssue] = []

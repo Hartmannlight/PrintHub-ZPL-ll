@@ -16,6 +16,10 @@ class ZplBuilder:
         self._origin_x = 0
         self._origin_y = 0
 
+    @property
+    def emit_ci28(self) -> bool:
+        return self._options.emit_ci28
+
     def start_label(self, *, width_dots: int, height_dots: int, origin_x: int = 0, origin_y: int = 0) -> None:
         self._origin_x = origin_x
         self._origin_y = origin_y

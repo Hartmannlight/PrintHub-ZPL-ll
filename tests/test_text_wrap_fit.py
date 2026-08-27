@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import string
+
 from zplgrid import LabelTarget
 from zplgrid.compiler import Compiler
 from zplgrid.measure import TextMetrics, ZplMeasuredTextMeasurer
@@ -208,3 +210,161 @@ def test_centered_lines_use_independent_single_line_field_blocks() -> None:
     assert zpl.count(",1,0,C,0") == 2
     assert "^FDFIRST\\&" in zpl
     assert "^FDSECOND\\&" in zpl
+
+
+def test_offline_font_metrics_distinguish_wide_and_narrow_glyphs() -> None:
+    measurer = ZplMeasuredTextMeasurer(enable_network=False)
+
+    wide = measurer._line_width("W" * 20, 32, 32)
+    normal = measurer._line_width("a" * 20, 32, 32)
+    narrow = measurer._line_width("i" * 20, 32, 32)
+
+    assert wide > normal > narrow
+    assert wide > 500
+    assert narrow < 220
+
+
+def test_offline_font_tables_cover_printable_ascii_without_duplicates() -> None:
+    expected = set(string.printable[:95])
+    for groups in (
+        ZplMeasuredTextMeasurer._FALLBACK_GLYPH_WIDTH_GROUPS,
+        ZplMeasuredTextMeasurer._TINY_FALLBACK_GLYPH_WIDTH_GROUPS,
+    ):
+        chars = "".join(group for group, _ratio in groups)
+        assert expected <= set(chars)
+        assert len(chars) == len(set(chars))
+
+
+def test_compiler_uses_deterministic_offline_measurement_by_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LABELARY_ENABLE", "1")
+
+    compiler = Compiler()
+
+    assert isinstance(compiler.text_measurer, ZplMeasuredTextMeasurer)
+    assert compiler.text_measurer._enable_network is False
+
+
+def test_offline_char_wrap_never_leaves_an_oversized_wide_glyph_line() -> None:
+    measurer = ZplMeasuredTextMeasurer(enable_network=False)
+    lines = measurer.wrap_lines(
+        text="W" * 30,
+        box_width_dots=300,
+        font_height_dots=32,
+        font_width_dots=32,
+        wrap="char",
+    )
+
+    assert len(lines) > 1
+    assert all(measurer._line_width(line, 32, 32) <= 300 for line in lines)
+
+
+def test_char_wrap_accounts_for_the_hyphens_own_width() -> None:
+    measurer = ZplMeasuredTextMeasurer(enable_network=False)
+    lines = measurer.wrap_lines(
+        text="i" * 50,
+        box_width_dots=30,
+        font_height_dots=32,
+        font_width_dots=32,
+        wrap="char",
+    )
+
+    assert len(lines) > 1
+    assert all(measurer._line_width(line, 32, 32) <= 30 for line in lines)
+    assert "".join(line.removesuffix("-") for line in lines) == "i" * 50
+
+
+def test_offline_metrics_use_more_conservative_ratios_for_tiny_fonts() -> None:
+    measurer = ZplMeasuredTextMeasurer(enable_network=False)
+
+    assert measurer._line_width("-" * 20, 8, 8) >= 179
+    assert measurer._line_width("W" * 20, 8, 8) >= 162
+    assert measurer._line_width("m" * 20, 8, 8) >= 151
+
+
+def test_unreliable_builtin_font_glyphs_are_reported() -> None:
+    template = {
+        "schema_version": 1,
+        "defaults": {
+            "leaf_padding_mm": [0, 0, 0, 0],
+            "render": {"emit_ci28": True},
+        },
+        "layout": {
+            "kind": "leaf",
+            "elements": [{
+                "type": "text",
+                "text": "backslash \\ and emoji 🙂",
+                "fit": "wrap",
+                "wrap": "word",
+                "max_lines": 2,
+            }],
+        },
+    }
+    result = Compiler(
+        text_measurer=ZplMeasuredTextMeasurer(enable_network=False),
+    ).compile_with_diagnostics(
+        load_template(template),
+        target=LabelTarget(width_mm=74, height_mm=22, dpi=203),
+        variables={},
+    )
+
+    diagnostic = next(item for item in result.diagnostics if item.code == "text_unsupported_glyph")
+    assert repr("\\") in diagnostic.message
+    assert repr("🙂") in diagnostic.message
+
+
+def test_non_ascii_text_warns_when_ci28_is_disabled() -> None:
+    template = {
+        "schema_version": 1,
+        "defaults": {
+            "leaf_padding_mm": [0, 0, 0, 0],
+            "render": {"emit_ci28": False},
+        },
+        "layout": {
+            "kind": "leaf",
+            "elements": [{
+                "type": "text",
+                "text": "Müller",
+                "fit": "overflow",
+                "wrap": "none",
+            }],
+        },
+    }
+    result = Compiler(
+        text_measurer=ZplMeasuredTextMeasurer(enable_network=False),
+    ).compile_with_diagnostics(
+        load_template(template),
+        target=LabelTarget(width_mm=74, height_mm=22, dpi=203),
+        variables={},
+    )
+
+    assert any(item.code == "text_utf8_disabled" for item in result.diagnostics)
+
+
+def test_shrink_to_fit_does_not_shrink_for_impossible_explicit_line_limit() -> None:
+    template = {
+        "schema_version": 1,
+        "name": "explicit_lines",
+        "defaults": {"leaf_padding_mm": [0, 0, 0, 0]},
+        "layout": {
+            "kind": "leaf",
+            "elements": [{
+                "type": "text",
+                "text": "ONE\\nTWO\\nTHREE",
+                "font_height_mm": 4,
+                "wrap": "word",
+                "fit": "shrink_to_fit",
+                "max_lines": 2,
+                "align_h": "left",
+                "align_v": "top",
+            }],
+        },
+    }
+    target = LabelTarget(width_mm=50, height_mm=30, dpi=203)
+    result = Compiler(
+        text_measurer=ZplMeasuredTextMeasurer(enable_network=False),
+    ).compile_with_diagnostics(load_template(template), target=target, variables={})
+
+    assert "^A0N,32,32" in result.zpl
+    assert [item.code for item in result.diagnostics] == ["text_cannot_fit"]

@@ -36,9 +36,9 @@ def test_render_zpl_returns_text_layout_diagnostics() -> None:
     response = api.render_zpl(_request())
 
     assert "^FB" not in response.zpl
-    assert response.diagnostics[0]["code"] == "text_max_lines_exceeded"
-    assert response.diagnostics[0]["element_id"] == "message-text"
-    assert response.diagnostics[0]["leaf_alias"] == "message"
+    assert response.diagnostics[0].code == "text_max_lines_exceeded"
+    assert response.diagnostics[0].element_id == "message-text"
+    assert response.diagnostics[0].leaf_alias == "message"
 
 
 def test_render_png_exposes_diagnostics_header(monkeypatch) -> None:
@@ -51,4 +51,3 @@ def test_render_png_exposes_diagnostics_header(monkeypatch) -> None:
 
     assert response.body == b"png"
     assert diagnostics[0]["code"] == "text_max_lines_exceeded"
-

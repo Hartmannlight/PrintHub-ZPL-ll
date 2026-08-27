@@ -50,11 +50,73 @@ class MonospaceApproxMeasurer(TextMeasurer):
 
 
 class ZplMeasuredTextMeasurer(TextMeasurer):
-    # Zebra's scalable font 0 is proportional. 0.6 is deliberately a little
-    # conservative for the common wide glyphs (A, M, W). Using a smaller value
-    # here than in _line_width used to create lines which did not actually fit
-    # once the printer's ^FB command laid them out a second time.
-    _FALLBACK_GLYPH_WIDTH_RATIO = 0.6
+    # Conservative advance-width buckets for Zebra scalable font 0. They are
+    # measured from unclipped Labelary rows at 12, 16, and 32 dots and rounded
+    # upward. Very small fonts need a separate table because integer rasterizer
+    # rounding makes their relative glyph widths substantially larger.
+    _FALLBACK_GLYPH_WIDTH_GROUPS = (
+        ('ijl', 0.28),
+        ('ftI', 0.30),
+        ("!'(),./:;[]`", 0.32),
+        (' ', 0.34),
+        ('r', 0.36),
+        ('z', 0.42),
+        ('s', 0.46),
+        ('ckvxyJ?', 0.48),
+        ('01aeL"*äö', 0.50),
+        ('23456789bdghnopquEFTZ#$\\^_{|}€ü', 0.52),
+        ('ß', 0.54),
+        ('CSV', 0.56),
+        ('ABKPXY', 0.58),
+        ('OQÄ', 0.60),
+        ('DGRÖ', 0.62),
+        ('HNU&Ü', 0.64),
+        ('w', 0.70),
+        ('mM', 0.78),
+        ('W', 0.84),
+        ('+-=@–', 0.92),
+        ('%', 0.94),
+        ('<>', 1.00),
+        ('~', 1.02),
+    )
+    _FALLBACK_GLYPH_WIDTHS = {
+        char: ratio
+        for chars, ratio in _FALLBACK_GLYPH_WIDTH_GROUPS
+        for char in chars
+    }
+    _TINY_FALLBACK_GLYPH_WIDTH_GROUPS = (
+        ('il', 0.34),
+        ('j', 0.36),
+        ('ftI', 0.38),
+        ("!'(),./:;[]`", 0.40),
+        ('r ', 0.44),
+        ('z', 0.52),
+        ('s', 0.56),
+        ('ckvxyJ?', 0.58),
+        ('0123456789aeoL"#$*\\|€äö', 0.62),
+        ('bdghnpquEFTZ^_{}ü', 0.66),
+        ('ß', 0.68),
+        ('CSV', 0.70),
+        ('ABKPXYÄ', 0.72),
+        ('Ö', 0.74),
+        ('OQ', 0.76),
+        ('DGR', 0.78),
+        ('HNU&Ü', 0.80),
+        ('w', 0.86),
+        ('mM', 0.98),
+        ('W', 1.04),
+        ('+-=@–', 1.14),
+        ('%', 1.16),
+        ('<>', 1.24),
+        ('~', 1.26),
+    )
+    _TINY_FALLBACK_GLYPH_WIDTHS = {
+        char: ratio
+        for chars, ratio in _TINY_FALLBACK_GLYPH_WIDTH_GROUPS
+        for char in chars
+    }
+    _UNKNOWN_GLYPH_WIDTH_RATIO = 1.05
+    _TINY_UNKNOWN_GLYPH_WIDTH_RATIO = 1.30
     def __init__(
         self,
         dpmm: int = 8,
@@ -132,9 +194,10 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
     ) -> TextMetrics:
         font = ZplFontSpec(font='0', orientation='N', height=font_height_dots, width=font_width_dots)
         if not self._enable_network:
-            char_w = max(1, int(font_width_dots * 0.6))
-            max_chars = max((len(line) for line in lines), default=0)
-            width = max_chars * char_w
+            width = max(
+                (self._fallback_line_width(line, font_width_dots) for line in lines),
+                default=0,
+            )
             height = len(lines) * (font_height_dots + line_spacing_dots)
             return TextMetrics(lines=len(lines), width_dots=width, height_dots=height)
         max_line_width = 1
@@ -193,6 +256,7 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
     def _wrap_char(self, text: str, box_width_dots: int, font_height_dots: int, font_width_dots: int) -> list[str]:
         remaining = text
         lines: list[str] = []
+
         def should_hyphenate(prev_char: str, next_char: str) -> bool:
             if not prev_char or not next_char:
                 return False
@@ -200,18 +264,43 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
                 return False
             return prev_char.isalnum() and next_char.isalnum()
 
+        def hyphenated_prefix_length(max_len: int) -> int:
+            # The hyphen has its own advance width. Reserving an arbitrary
+            # character slot is unsafe for proportional fonts (for example,
+            # ``ii-`` is wider than ``iii`` in Zebra font 0). Find the longest
+            # prefix whose appended hyphen really fits.
+            prefix_len = min(max_len, len(remaining) - 1)
+            while prefix_len >= 2:
+                if self._line_width(
+                    remaining[:prefix_len] + '-',
+                    font_height_dots,
+                    font_width_dots,
+                ) <= box_width_dots:
+                    return prefix_len
+                prefix_len -= 1
+            return 0
+
         if not self._enable_network:
-            char_w = max(1, int(font_width_dots * self._FALLBACK_GLYPH_WIDTH_RATIO))
-            max_len = max(1, box_width_dots // char_w)
             while remaining:
+                max_len = self._max_chars_that_fit(
+                    remaining,
+                    box_width_dots,
+                    font_height_dots,
+                    font_width_dots,
+                )
+                if max_len <= 0:
+                    # Always make progress, even when the box is narrower than
+                    # one glyph. The compiler reports the resulting overflow.
+                    max_len = 1
                 if max_len >= len(remaining):
                     lines.append(remaining)
                     break
                 line = remaining[:max_len]
                 next_char = remaining[max_len]
                 if should_hyphenate(line[-1], next_char) and max_len > 2:
-                    prefix = remaining[:max_len - 1]
-                    suffix_len = len(remaining) - (max_len - 1)
+                    prefix_len = hyphenated_prefix_length(max_len)
+                    prefix = remaining[:prefix_len]
+                    suffix_len = len(remaining) - prefix_len
                     if (
                         prefix
                         and prefix == prefix.strip()
@@ -220,7 +309,7 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
                         and suffix_len >= 2
                     ):
                         line = prefix + '-'
-                        remaining = remaining[max_len - 1:]
+                        remaining = remaining[prefix_len:]
                     else:
                         remaining = remaining[max_len:]
                 else:
@@ -239,8 +328,9 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
             line = remaining[:max_len]
             next_char = remaining[max_len]
             if should_hyphenate(line[-1], next_char) and max_len > 2:
-                prefix = remaining[:max_len - 1]
-                suffix_len = len(remaining) - (max_len - 1)
+                prefix_len = hyphenated_prefix_length(max_len)
+                prefix = remaining[:prefix_len]
+                suffix_len = len(remaining) - prefix_len
                 if (
                     prefix
                     and prefix == prefix.strip()
@@ -249,7 +339,7 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
                     and suffix_len >= 2
                 ):
                     line = prefix + '-'
-                    remaining = remaining[max_len - 1:]
+                    remaining = remaining[prefix_len:]
                 else:
                     remaining = remaining[max_len:]
             else:
@@ -277,8 +367,7 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
             return cached
 
         if not self._enable_network:
-            char_w = max(1, int(font_width_dots * 0.6))
-            width = len(text) * char_w
+            width = self._fallback_line_width(text, font_width_dots)
             self._width_cache[key] = width
             return width
 
@@ -288,6 +377,22 @@ class ZplMeasuredTextMeasurer(TextMeasurer):
         width = ink.ink_width
         self._width_cache[key] = width
         return width
+
+    @classmethod
+    def _fallback_line_width(cls, text: str, font_width_dots: int) -> int:
+        if not text or font_width_dots <= 0:
+            return 0
+        if font_width_dots < 12:
+            widths = cls._TINY_FALLBACK_GLYPH_WIDTHS
+            unknown_ratio = cls._TINY_UNKNOWN_GLYPH_WIDTH_RATIO
+        else:
+            widths = cls._FALLBACK_GLYPH_WIDTHS
+            unknown_ratio = cls._UNKNOWN_GLYPH_WIDTH_RATIO
+        ratio = sum(
+            widths.get(char, unknown_ratio)
+            for char in text
+        )
+        return max(1, math.ceil(ratio * font_width_dots))
 
     def _make_measurer(self, *, box_width_dots: int, font_height_dots: int) -> ZplTextMeasurer:
         dpmm = self._dpmm
