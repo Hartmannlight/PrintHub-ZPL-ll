@@ -1,0 +1,80 @@
+name: Candidate Container
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    name: candidate-${{ matrix.arch }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: workspace/PrintHub-ZPL-ll
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Record build time
+        id: metadata
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Build exact candidate without publishing
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: workspace/PrintHub-ZPL-ll
+          file: workspace/PrintHub-ZPL-ll/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          provenance: false
+          tags: candidate:gate
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
+          labels: |
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.created=${{ steps.metadata.outputs.created }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=sha-${{ github.sha }}-r${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Runtime smoke test
+        working-directory: workspace/PrintHub-ZPL-ll
+        run: python3 scripts/container_smoke.py candidate:gate
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          # renovate: datasource=github-releases depName=aquasecurity/trivy
+          version: v0.74.0
+          cache: true
+      - name: Scan image and generate platform SBOM
+        working-directory: workspace/PrintHub-ZPL-ll
+        run: |
+          mkdir -p artifacts
+          trivy image --scanners vuln,secret --format json --output "$RUNNER_TEMP/image-scan.json" candidate:gate
+          python3 scripts/security_gate.py "$RUNNER_TEMP/image-scan.json"
+          trivy image --format spdx-json --output artifacts/sbom.spdx.json candidate:gate
+      - name: Export tested candidate
+        working-directory: workspace/PrintHub-ZPL-ll
+        run: docker save candidate:gate -o artifacts/image.tar
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-${{ matrix.arch }}
+          path: |
+            workspace/PrintHub-ZPL-ll/artifacts/image.tar
+            workspace/PrintHub-ZPL-ll/artifacts/sbom.spdx.json
+          retention-days: 3
+          compression-level: 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: container-reports-${{ matrix.arch }}
+          path: |
+            workspace/PrintHub-ZPL-ll/artifacts/*scan.json
+            workspace/PrintHub-ZPL-ll/artifacts/*.log
+          retention-days: 14

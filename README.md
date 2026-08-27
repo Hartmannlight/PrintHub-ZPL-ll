@@ -412,3 +412,11 @@ compiler-generated jobs it also omits the generated `^PW`/`^LL` header and does 
 bake the legacy registry calibration into layout coordinates. Caller-supplied raw
 ZPL is not stripped: intentional device commands in it still take effect. Raw
 TCP printers and the emulator retain their existing behavior.
+
+
+## Automated maintenance and releases
+
+Push to main, exact vMAJOR.MINOR.PATCH tags, manual main runs and Monday 03:23 UTC clean rebuilds validate both native linux/amd64 and linux/arm64 candidates. Only the tested image archives are published. Platform SBOM and provenance attestations precede promotion of the index. Immutable sha-SHA-rRUN-ATTEMPT tags are never overwritten; latest moves only for the current main commit. Version tags do not move latest. No stable or major/minor aliases are promised while the release train is 0.x.
+
+See [policy](docs/SECURITY_RELEASE_POLICY.md), [required owner setup](docs/MANUAL_GITHUB_SETUP.md) and [rollback](docs/ROLLBACK.md).
+Renovate auto-merge remains blocked until protected-branch checks are verified. No deployment automation is installed.

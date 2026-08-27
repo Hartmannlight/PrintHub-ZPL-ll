@@ -1,0 +1,91 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  source-quality:
+    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    defaults:
+      run:
+        working-directory: workspace/PrintHub-ZPL-ll
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: workspace/PrintHub-ZPL-ll
+          persist-credentials: false
+
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.version }}
+      - name: Install locked dependencies
+        env:
+          # renovate: datasource=pypi depName=poetry
+          POETRY_VERSION: 2.4.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdmtx0t64
+          python -m pip install "poetry==$POETRY_VERSION"
+          poetry check --lock
+          poetry sync --all-groups
+      - name: Syntax and regression tests
+        run: |
+          poetry run python -m compileall -q zplgrid
+          poetry run pytest -q --junitxml=artifacts/pytest.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: test-reports-${{ matrix.version }}
+          path: workspace/PrintHub-ZPL-ll/artifacts/
+          retention-days: 14
+
+  source-security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          # renovate: datasource=github-releases depName=aquasecurity/trivy
+          version: v0.74.0
+          cache: true
+      - name: Scan locked dependencies, configuration and secrets
+        run: |
+          mkdir -p artifacts
+          python3 scripts/security_gate.py --self-test
+          python3 scripts/test_release.py
+          trivy fs --scanners vuln,misconfig,secret --include-dev-deps --skip-dirs .git,.venv,node_modules,target,artifacts --skip-files '**/*.dockerignore' --format json --output "$RUNNER_TEMP/source-scan.json" .
+          python3 scripts/security_gate.py "$RUNNER_TEMP/source-scan.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: source-security-report
+          path: artifacts/source-scan.json
+          retention-days: 14
+  container:
+    uses: ./.github/workflows/container-gate.yml
+  quality-and-container-gate:
+    if: always()
+    needs: [source-quality, source-security, container]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every quality gate
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -c 'import json,os; assert all(j["result"] == "success" for j in json.loads(os.environ["RESULTS"]).values())'
