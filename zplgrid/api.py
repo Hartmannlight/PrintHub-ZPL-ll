@@ -34,7 +34,7 @@ from .print_jobs_store import (
     save_job as save_stored_print_job,
 )
 from .render import RenderOptions, render_text
-from .templates_store import load_template_entry, list_templates, save_template_entry, update_template_entry
+from .templates_store import load_template_entry, list_templates, save_template_entry, seed_bundled_templates, update_template_entry
 from .zebra_tamer import get_snapshot
 
 
@@ -98,6 +98,7 @@ class PrintersConfigResponse(BaseModel):
 @app.on_event("startup")
 def _load_printers_config_on_startup() -> None:
     recover_interrupted_jobs()
+    seed_bundled_templates(os.getenv('ZPLGRID_BUNDLED_TEMPLATES_DIR'))
     try:
         registry = PrinterRegistry()
         registry.initialize()

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "Briefadresse",
+  "defaults": {
+    "leaf_padding_mm": [2.0, 2.0, 2.0, 2.0],
+    "text": {
+      "font_height_mm": 4.2,
+      "wrap": "word",
+      "fit": "shrink_to_fit",
+      "max_lines": 5,
+      "align_h": "left",
+      "align_v": "center"
+    },
+    "render": {
+      "missing_variables": "error",
+      "emit_ci28": true
+    }
+  },
+  "layout": {
+    "kind": "leaf",
+    "alias": "address",
+    "elements": [
+      {
+        "type": "text",
+        "text": "{address}"
+      }
+    ]
+  }
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -45,6 +46,28 @@ class TemplateEntry:
 def ensure_templates_dir() -> Path:
     _TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
     return _TEMPLATES_DIR
+
+
+def seed_bundled_templates(source_dir: str | Path | None) -> list[str]:
+    """Install missing built-in templates without changing user-owned copies."""
+    if not source_dir:
+        return []
+    source_root = Path(source_dir)
+    if not source_root.is_dir():
+        raise ValueError(f'bundled templates directory does not exist: {source_root}')
+
+    target_root = ensure_templates_dir()
+    installed: list[str] = []
+    for source in sorted(source_root.iterdir()):
+        if not source.is_dir() or not (source / _METADATA_FILENAME).is_file():
+            continue
+        template_id = validate_template_id(source.name)
+        target = _template_dir(target_root, template_id)
+        if target.exists():
+            continue
+        shutil.copytree(source, target)
+        installed.append(template_id)
+    return installed
 
 
 def validate_template_id(template_id: str) -> str:

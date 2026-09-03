@@ -21,13 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends libdmtx0b \
     && chown -R appuser:appuser /data /app/configs
 COPY --from=dependencies /app/.venv /app/.venv
 COPY zplgrid ./zplgrid
+COPY templates /app/templates
 ENV PATH=/app/.venv/bin:$PATH \
     ZPLGRID_TEMPLATES_DIR=/data/templates \
+    ZPLGRID_BUNDLED_TEMPLATES_DIR=/app/templates \
     ZPLGRID_PRINT_DRAFTS_DIR=/data/drafts \
     ZPLGRID_PRINT_JOBS_DIR=/data/print-jobs \
     ZPLGRID_COUNTERS_PATH=/data/counters.json \
     ZPLGRID_PRINTER_REGISTRY_PATH=/data/printers.sqlite3
-USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
-CMD ["uvicorn", "zplgrid.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "zplgrid.container_entrypoint"]

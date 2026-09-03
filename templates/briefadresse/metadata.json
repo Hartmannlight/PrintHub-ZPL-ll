@@ -1,0 +1,22 @@
+{
+  "id": "briefadresse",
+  "name": "Briefadresse",
+  "tags": ["brief", "adresse", "text"],
+  "variables": [
+    {
+      "name": "address",
+      "label": "Adresse",
+      "type": "textarea",
+      "rows": 4,
+      "mode": "required",
+      "placeholder": "Name\\nStrasse und Hausnummer\\nPLZ Ort"
+    }
+  ],
+  "preview_target": {
+    "width_mm": 72.0,
+    "height_mm": 26.0,
+    "dpi": 203,
+    "origin_x_mm": 0.0,
+    "origin_y_mm": 0.0
+  }
+}
