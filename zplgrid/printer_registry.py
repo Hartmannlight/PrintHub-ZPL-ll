@@ -35,12 +35,15 @@ def normalize_agent_url(value: str) -> str:
 
 def _keys(printer: Mapping[str, Any]) -> tuple[str, str | None]:
     connection = printer['connection']
-    if connection['protocol'] == 'zebra_tamer':
-        endpoint = ['zebra_tamer', normalize_agent_url(connection['base_url']), connection['printer_id']]
+    protocol = connection['protocol']
+    if protocol in {'zebra_tamer', 'driver_agent'}:
+        endpoint = [protocol, normalize_agent_url(connection['base_url']), connection['printer_id']]
         identity = [connection['agent_id'], connection['printer_id']] if connection.get('agent_id') else None
-    else:
+    elif protocol == 'raw9100':
         endpoint = ['raw9100', connection['host'].strip().lower(), connection['port']]
         identity = None
+    else:
+        raise ValueError(f'Unsupported printer connection protocol: {protocol}')
     return json.dumps(endpoint), json.dumps(identity) if identity else None
 
 
@@ -146,7 +149,7 @@ class PrinterRegistry:
                     self._insert(db, printer, 'yaml-import')
 
     def patch(self, printer_id: str, changes: Mapping[str, Any], revision: int) -> dict[str, Any]:
-        allowed = {'name', 'enabled', 'media', 'alignment', 'zpl', 'defaults', 'model', 'vendor', 'capabilities'}
+        allowed = {'name', 'enabled', 'media', 'alignment', 'zpl', 'driver_options', 'defaults', 'model', 'vendor', 'capabilities'}
         if not changes or set(changes) - allowed:
             raise ValueError('Only printer settings may be changed; ID and connection are immutable')
         with self._transaction() as db:

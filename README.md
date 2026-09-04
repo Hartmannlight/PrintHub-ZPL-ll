@@ -299,6 +299,23 @@ For saved templates, prefer the persistent job API:
 - `GET /v1/print-jobs` lists recent jobs.
 - `GET /v1/print-jobs/{job_id}` returns its status and downstream job ID.
 - `POST /v1/print-jobs/{job_id}/retry` explicitly retries a failed job.
+- `POST /v1/print-jobs/raster` accepts physical-size-aware PNG, JPEG or PGM
+  pages and creates the same durable job before any hardware I/O.
+- `POST /v1/print-jobs/{job_id}/release` releases a held raster job with an
+  explicit `fit` or `fill` scaling decision.
+
+Raster jobs default to `scaling: "hold"`. If a page does not match the loaded
+label, PrintHub stores the source and an exact one-bit print preview but sends
+nothing to the device. `fit` preserves all content with margins; `fill` crops
+centrally without distorting the aspect ratio. Each page is one label. Color
+documents are converted through the common grayscale/dithering pipeline before
+the selected device driver encodes them.
+
+The raster service is intentionally independent of ZPL. `RasterDriver` encodes
+the prepared one-bit page and `PrinterBackend` transports the resulting device
+artifact. The current adapters produce ZPL `^GF` and dispatch it over raw 9100
+or ZebraTamer. Future bitmap devices can add their own driver/agent adapter
+without changing IPP ingestion, scaling, previews or persistent job handling.
 
 Jobs are stored under `ZPLGRID_PRINT_JOBS_DIR` (default
 `/data/print-jobs`). An optional `idempotency_key` prevents duplicate printing

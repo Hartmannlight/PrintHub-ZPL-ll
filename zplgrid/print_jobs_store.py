@@ -31,6 +31,11 @@ def _job_path(job_id: str) -> Path:
     return jobs_dir() / f"{normalized}.json"
 
 
+def _document_path(job_id: str) -> Path:
+    normalized = _job_path(job_id).stem
+    return jobs_dir() / "documents" / f"{normalized}.json"
+
+
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -75,6 +80,7 @@ def create_job(
         now = _now()
         payload: dict[str, Any] = {
             "id": str(uuid.uuid4()),
+            "source_kind": "template",
             "status": "queued",
             "printer_id": printer_id,
             "template_id": template_id,
@@ -92,6 +98,53 @@ def create_job(
         }
         _write_atomic(_job_path(payload["id"]), payload)
         return payload
+
+
+def create_raster_job(
+    *,
+    printer_id: str,
+    document: dict[str, Any],
+    ticket: dict[str, Any],
+    idempotency_key: str | None,
+    origin: str | None,
+) -> dict[str, Any]:
+    with _jobs_lock:
+        if idempotency_key:
+            existing = find_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                return existing
+        now = _now()
+        job_id = str(uuid.uuid4())
+        payload: dict[str, Any] = {
+            "id": job_id,
+            "source_kind": "raster",
+            "status": "queued",
+            "printer_id": printer_id,
+            "template_id": None,
+            "page_count": len(document.get("pages") or []),
+            "ticket": ticket,
+            "idempotency_key": idempotency_key,
+            "origin": origin,
+            "attempts": 0,
+            "bytes_sent": None,
+            "downstream_job_id": None,
+            "downstream_job_state": None,
+            "preview_png_base64": None,
+            "warning": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        _write_atomic(_document_path(job_id), document)
+        _write_atomic(_job_path(job_id), payload)
+        return payload
+
+
+def load_job_document(job_id: str) -> dict[str, Any]:
+    path = _document_path(job_id)
+    if not path.exists():
+        raise FileNotFoundError(job_id)
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_job(job_id: str) -> dict[str, Any]:

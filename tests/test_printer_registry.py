@@ -42,6 +42,30 @@ def test_seed_import_is_once_and_yaml_is_not_written(registry):
     assert restarted.get('existing-id')['alignment']['dpi'] == 300
 
 
+def test_driver_agent_profile_does_not_require_zpl_settings(tmp_path):
+    registry = PrinterRegistry(tmp_path / 'drivers.sqlite3', tmp_path / 'absent.yml')
+    registry.initialize()
+    profile = printer('niimbot-b1')
+    profile['driver'] = 'niimbot_b1'
+    profile['vendor'] = 'Niimbot'
+    profile['model'] = 'B1'
+    profile['connection'] = {
+        'protocol': 'driver_agent',
+        'base_url': 'http://niimbot-agent:8080',
+        'printer_id': 'b1-usb',
+        'agent_id': 'pi-labels',
+        'timeout_ms': 10000,
+    }
+    profile.pop('zpl')
+    profile['driver_options'] = {'compression': 'auto'}
+
+    created = registry.create(profile)
+
+    assert created['driver'] == 'niimbot_b1'
+    assert 'zpl' not in created
+    assert created['driver_options'] == {'compression': 'auto'}
+
+
 def test_registration_preserves_all_existing_settings(registry):
     incoming = printer()
     incoming.update(name='Factory name', enabled=True)

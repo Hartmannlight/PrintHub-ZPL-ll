@@ -356,6 +356,44 @@
         }
       }
     },
+    "/v1/print-jobs/raster": {
+      "post": {
+        "summary": "Create Raster Print Job",
+        "operationId": "create_raster_print_job_v1_print_jobs_raster_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RasterPrintJobCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/print-jobs/{job_id}": {
       "get": {
         "summary": "Get Print Job",
@@ -371,6 +409,55 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/print-jobs/{job_id}/release": {
+      "post": {
+        "summary": "Release Print Job",
+        "operationId": "release_print_job_v1_print_jobs__job_id__release_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RasterPrintJobReleaseRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1053,6 +1140,25 @@
         ],
         "title": "AgentDiscoveryRequest"
       },
+      "ContentOptimize": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "text",
+          "graphics",
+          "photo"
+        ],
+        "title": "ContentOptimize"
+      },
+      "DitherMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "none",
+          "floyd_steinberg"
+        ],
+        "title": "DitherMode"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1228,8 +1334,31 @@
             "title": "Printer Id"
           },
           "template_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Template Id"
+          },
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind",
+            "default": "template"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
           },
           "attempts": {
             "type": "integer",
@@ -1268,6 +1397,28 @@
             ],
             "title": "Downstream Job State"
           },
+          "preview_png_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Png Base64"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          },
           "error": {
             "anyOf": [
               {
@@ -1293,7 +1444,6 @@
           "id",
           "status",
           "printer_id",
-          "template_id",
           "attempts",
           "created_at",
           "updated_at"
@@ -1570,6 +1720,128 @@
         ],
         "title": "PrintersConfigResponse"
       },
+      "RasterPageRequest": {
+        "properties": {
+          "mime_type": {
+            "type": "string",
+            "pattern": "^image/(png|jpeg|x-portable-graymap)$",
+            "title": "Mime Type"
+          },
+          "data_base64": {
+            "type": "string",
+            "maxLength": 48000000,
+            "minLength": 1,
+            "title": "Data Base64"
+          },
+          "width_mm": {
+            "type": "number",
+            "maximum": 2000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Width Mm"
+          },
+          "height_mm": {
+            "type": "number",
+            "maximum": 2000.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Height Mm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mime_type",
+          "data_base64",
+          "width_mm",
+          "height_mm"
+        ],
+        "title": "RasterPageRequest"
+      },
+      "RasterPrintJobCreateRequest": {
+        "properties": {
+          "printer_id": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Printer Id"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/RasterPageRequest"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Pages"
+          },
+          "copies": {
+            "type": "integer",
+            "maximum": 999.0,
+            "minimum": 1.0,
+            "title": "Copies",
+            "default": 1
+          },
+          "scaling": {
+            "$ref": "#/components/schemas/ScalingPolicy",
+            "default": "hold"
+          },
+          "content_optimize": {
+            "$ref": "#/components/schemas/ContentOptimize",
+            "default": "auto"
+          },
+          "dither": {
+            "$ref": "#/components/schemas/DitherMode",
+            "default": "auto"
+          },
+          "mismatch_tolerance_mm": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Mismatch Tolerance Mm",
+            "default": 0.5
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_id",
+          "pages"
+        ],
+        "title": "RasterPrintJobCreateRequest"
+      },
+      "RasterPrintJobReleaseRequest": {
+        "properties": {
+          "scaling": {
+            "$ref": "#/components/schemas/ScalingPolicy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scaling"
+        ],
+        "title": "RasterPrintJobReleaseRequest"
+      },
       "RenderDiagnostic": {
         "properties": {
           "code": {
@@ -1722,6 +1994,16 @@
           "height_mm"
         ],
         "title": "RenderTarget"
+      },
+      "ScalingPolicy": {
+        "type": "string",
+        "enum": [
+          "hold",
+          "fit",
+          "fill"
+        ],
+        "title": "ScalingPolicy",
+        "description": "How a document page is mapped to the loaded label."
       },
       "TemplateDetailResponse": {
         "properties": {
@@ -1894,6 +2176,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
