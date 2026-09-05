@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from zplgrid import api
 from zplgrid import print_jobs_store
+from zplgrid.fleet import DeliveryReceipt, DeliveryState
 
 
 def test_direct_template_print_route_is_not_public() -> None:
@@ -44,6 +45,153 @@ def test_print_job_is_persisted_and_idempotent(tmp_path, monkeypatch) -> None:
     assert first.attempts == 1
     assert calls == ["schildkrote"]
     assert api.get_print_job(first.id).id == first.id
+
+
+@pytest.mark.parametrize(
+    ("fleet_state", "expected_status"),
+    [
+        (DeliveryState.QUEUED, "queued"),
+        (DeliveryState.CONNECTING, "queued"),
+        (DeliveryState.TRANSMITTING, "queued"),
+        (DeliveryState.RETRY_SCHEDULED, "queued"),
+        (DeliveryState.TRANSPORT_ACCEPTED, "transport_accepted"),
+        (DeliveryState.CONFIRMED, "confirmed"),
+        (DeliveryState.UNCONFIRMED, "unconfirmed"),
+        (DeliveryState.FAILED, "failed"),
+    ],
+)
+def test_get_print_job_reconciles_persisted_fleet_state(
+    tmp_path, monkeypatch, fleet_state, expected_status
+) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    job = print_jobs_store.create_job(
+        printer_id="zebra-1",
+        template_id="asset-label",
+        variables={},
+        target=None,
+        idempotency_key=None,
+        origin="test",
+    )
+    job["status"] = "queued"
+    job["downstream_job_id"] = "delivery-1"
+    job["downstream_job_state"] = "queued"
+    print_jobs_store.save_job(job)
+
+    class Fleet:
+        def get_deliveries(self, delivery_ids):
+            assert delivery_ids == ["delivery-1"]
+            return {
+                "delivery-1": DeliveryReceipt(
+                    bytes_accepted=42,
+                    state=fleet_state,
+                    delivery_id="delivery-1",
+                    downstream_state=fleet_state.value,
+                    error="ambiguous transport" if fleet_state is DeliveryState.UNCONFIRMED else None,
+                )
+            }
+
+    monkeypatch.setattr(api, "_fleet", Fleet)
+
+    reconciled = api.get_print_job(job["id"])
+
+    assert reconciled.status == expected_status
+    assert reconciled.downstream_job_state == fleet_state.value
+    assert reconciled.bytes_sent == 42
+    assert print_jobs_store.load_job(job["id"])["status"] == expected_status
+    if fleet_state is DeliveryState.UNCONFIRMED:
+        assert reconciled.error == "ambiguous transport"
+
+
+def test_list_print_jobs_batches_reconciliation_and_survives_fleet_outage(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    for delivery_id in ("delivery-1", "delivery-2"):
+        job = print_jobs_store.create_job(
+            printer_id="zebra-1",
+            template_id="asset-label",
+            variables={},
+            target=None,
+            idempotency_key=None,
+            origin="test",
+        )
+        job["downstream_job_id"] = delivery_id
+        print_jobs_store.save_job(job)
+
+    class Fleet:
+        calls = []
+
+        def get_deliveries(self, delivery_ids):
+            self.calls.append(delivery_ids)
+            raise RuntimeError("Fleet is temporarily unavailable")
+
+    fleet = Fleet()
+    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+
+    jobs = api.get_print_jobs()
+
+    assert len(jobs) == 2
+    assert all(job.status == "queued" for job in jobs)
+    assert len(fleet.calls) == 1
+    assert set(fleet.calls[0]) == {"delivery-1", "delivery-2"}
+
+
+def test_multi_delivery_job_exposes_and_aggregates_every_fleet_state(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    job = print_jobs_store.create_job(
+        printer_id="zebra-1",
+        template_id="asset-label",
+        variables={},
+        target=None,
+        idempotency_key=None,
+        origin="test",
+    )
+    job["downstream_job_id"] = "delivery-1"
+    job["downstream_job_state"] = "queued"
+    job["downstream_jobs"] = [
+        {"id": "delivery-1", "state": "queued", "bytes_accepted": 0},
+        {"id": "delivery-2", "state": "queued", "bytes_accepted": 0},
+    ]
+    print_jobs_store.save_job(job)
+
+    class Fleet:
+        def get_deliveries(self, delivery_ids):
+            assert delivery_ids == ["delivery-1", "delivery-2"]
+            return {
+                "delivery-1": DeliveryReceipt(
+                    bytes_accepted=41,
+                    state=DeliveryState.TRANSPORT_ACCEPTED,
+                    delivery_id="delivery-1",
+                    downstream_state="transport_accepted",
+                ),
+                "delivery-2": DeliveryReceipt(
+                    bytes_accepted=43,
+                    state=DeliveryState.UNCONFIRMED,
+                    delivery_id="delivery-2",
+                    downstream_state="unconfirmed",
+                    error="connection lost during transmission",
+                ),
+            }
+
+    monkeypatch.setattr(api, "_fleet", Fleet)
+
+    reconciled = api.get_print_job(job["id"])
+
+    assert reconciled.status == "unconfirmed"
+    assert reconciled.bytes_sent == 84
+    assert reconciled.downstream_job_id == "delivery-1"
+    assert reconciled.downstream_job_state == "transport_accepted"
+    assert [item.id for item in reconciled.downstream_jobs] == [
+        "delivery-1",
+        "delivery-2",
+    ]
+    assert [item.state for item in reconciled.downstream_jobs] == [
+        "transport_accepted",
+        "unconfirmed",
+    ]
+    assert reconciled.error == "connection lost during transmission"
 
 
 def test_failed_print_job_can_be_retried(tmp_path, monkeypatch) -> None:

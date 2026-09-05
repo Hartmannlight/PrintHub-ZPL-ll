@@ -40,6 +40,7 @@ class DeliveryReceipt:
     state: DeliveryState
     delivery_id: str | None = None
     downstream_state: str | None = None
+    error: str | None = None
 
     def __post_init__(self) -> None:
         if self.bytes_accepted < 0:
@@ -58,6 +59,10 @@ class ArtifactDeliveryPort(Protocol):
         artifact: PrintArtifact,
         printer: Mapping[str, Any],
     ) -> DeliveryReceipt: ...
+
+    def get_deliveries(
+        self, delivery_ids: list[str]
+    ) -> dict[str, DeliveryReceipt]: ...
 
 
 class PrinterCatalogPort(Protocol):

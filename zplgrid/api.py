@@ -16,7 +16,13 @@ from pydantic import BaseModel, Field, model_validator
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
-from .fleet import FleetConflict, HttpPrinterFleetAdapter, PrinterFleetPort, PrintArtifact
+from .fleet import (
+    DeliveryState,
+    FleetConflict,
+    HttpPrinterFleetAdapter,
+    PrinterFleetPort,
+    PrintArtifact,
+)
 from .labelary import render_labelary_png_bytes
 from .integration_events import (
     IntegrationEventStore,
@@ -148,6 +154,7 @@ def _record_integration_state(job: dict[str, Any]) -> dict[str, Any]:
         "detail": {
             "downstream_job_id": job.get("downstream_job_id"),
             "downstream_job_state": job.get("downstream_job_state"),
+            "downstream_jobs": job.get("downstream_jobs") or [],
             "error": job.get("error"),
             "warning": job.get("warning"),
         },
@@ -421,6 +428,13 @@ class RasterPrintJobReleaseRequest(BaseModel):
     scaling: ScalingPolicy
 
 
+class DownstreamJobResponse(BaseModel):
+    id: str
+    state: str
+    bytes_accepted: int = 0
+    error: Optional[str] = None
+
+
 class PrintJobResponse(BaseModel):
     id: str
     status: str
@@ -432,6 +446,7 @@ class PrintJobResponse(BaseModel):
     bytes_sent: Optional[int] = None
     downstream_job_id: Optional[str] = None
     downstream_job_state: Optional[str] = None
+    downstream_jobs: list[DownstreamJobResponse] = Field(default_factory=list)
     preview_png_base64: Optional[str] = None
     warning: Optional[str] = None
     error: Optional[str] = None
@@ -704,6 +719,20 @@ def _decode_source_document(document: Mapping[str, Any]) -> tuple[bytes, str]:
     return data, mime_type
 
 
+def _downstream_job_records(
+    job_ids: tuple[str, ...], job_states: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": job_id,
+            "state": job_states[index] if index < len(job_states) else "queued",
+            "bytes_accepted": 0,
+            "error": None,
+        }
+        for index, job_id in enumerate(job_ids)
+    ]
+
+
 def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     printer = _get_printer(str(job["printer_id"]))
     _ensure_printer_enabled(printer)
@@ -763,6 +792,10 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     job["bytes_sent"] = dispatched.bytes_sent
     job["downstream_job_id"] = dispatched.downstream_job_ids[0] if dispatched.downstream_job_ids else None
     job["downstream_job_state"] = dispatched.downstream_job_states[0] if dispatched.downstream_job_states else None
+    job["downstream_jobs"] = _downstream_job_records(
+        dispatched.downstream_job_ids,
+        dispatched.downstream_job_states,
+    )
     job["preview_png_base64"] = base64.b64encode(dispatched.previews[0]).decode("ascii")
     job["warning"] = None
     return save_stored_print_job(job)
@@ -800,11 +833,126 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
         job["bytes_sent"] = response.bytes_sent
         job["downstream_job_id"] = response.job_id
         job["downstream_job_state"] = response.job_state
+        job["downstream_jobs"] = (
+            [
+                {
+                    "id": response.job_id,
+                    "state": response.job_state or "queued",
+                    "bytes_accepted": response.bytes_sent,
+                    "error": None,
+                }
+            ]
+            if response.job_id
+            else []
+        )
     except (FileNotFoundError, ValueError, OSError, RuntimeError, HTTPException) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         job["status"] = "failed"
         job["error"] = str(detail)
     return _record_integration_state(save_stored_print_job(job))
+
+
+_PENDING_FLEET_STATES = {
+    DeliveryState.QUEUED,
+    DeliveryState.CONNECTING,
+    DeliveryState.TRANSMITTING,
+    DeliveryState.RETRY_SCHEDULED,
+}
+
+
+def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    job_deliveries: list[list[dict[str, Any]]] = []
+    for job in jobs:
+        entries = [
+            dict(entry)
+            for entry in job.get("downstream_jobs") or []
+            if isinstance(entry, dict) and entry.get("id")
+        ]
+        if not entries and job.get("downstream_job_id"):
+            entries = [
+                {
+                    "id": str(job["downstream_job_id"]),
+                    "state": str(job.get("downstream_job_state") or "queued"),
+                    "bytes_accepted": int(job.get("bytes_sent") or 0),
+                    "error": job.get("error"),
+                }
+            ]
+        job_deliveries.append(entries)
+    delivery_ids = list(
+        dict.fromkeys(str(entry["id"]) for entries in job_deliveries for entry in entries)
+    )
+    if not delivery_ids:
+        return jobs
+    try:
+        deliveries = _fleet().get_deliveries(delivery_ids)
+    except (OSError, RuntimeError):
+        return jobs
+
+    reconciled: list[dict[str, Any]] = []
+    for original, entries in zip(jobs, job_deliveries, strict=True):
+        job = dict(original)
+        if not entries:
+            reconciled.append(job)
+            continue
+        for entry in entries:
+            receipt = deliveries.get(str(entry["id"]))
+            if receipt is not None:
+                entry.update(
+                    state=receipt.downstream_state or receipt.state.value,
+                    bytes_accepted=receipt.bytes_accepted,
+                    error=receipt.error,
+                )
+        states: list[DeliveryState] = []
+        for entry in entries:
+            try:
+                states.append(DeliveryState(str(entry.get("state") or "unconfirmed")))
+            except ValueError:
+                states.append(DeliveryState.UNCONFIRMED)
+        if DeliveryState.UNCONFIRMED in states:
+            status = DeliveryState.UNCONFIRMED.value
+        elif DeliveryState.FAILED in states:
+            status = DeliveryState.FAILED.value
+        elif any(state in _PENDING_FLEET_STATES for state in states):
+            status = DeliveryState.QUEUED.value
+        elif states and all(state is DeliveryState.CONFIRMED for state in states):
+            status = DeliveryState.CONFIRMED.value
+        else:
+            status = DeliveryState.TRANSPORT_ACCEPTED.value
+        error = next(
+            (
+                str(entry["error"])
+                for entry in entries
+                if entry.get("error")
+                and str(entry.get("state")) in {"unconfirmed", "failed"}
+            ),
+            None,
+        )
+        if error is None and status == DeliveryState.UNCONFIRMED.value:
+            error = "PrinterFleet reports an ambiguous delivery outcome"
+        elif error is None and status == DeliveryState.FAILED.value:
+            error = "PrinterFleet delivery failed"
+        first = entries[0]
+        bytes_sent = sum(int(entry.get("bytes_accepted") or 0) for entry in entries)
+        changed = any(
+            (
+                job.get("status") != status,
+                job.get("downstream_job_id") != first["id"],
+                job.get("downstream_job_state") != first.get("state"),
+                job.get("downstream_jobs") != entries,
+                job.get("bytes_sent") != bytes_sent,
+                job.get("error") != error,
+            )
+        )
+        job.update(
+            status=status,
+            downstream_job_id=first["id"],
+            downstream_job_state=first.get("state"),
+            downstream_jobs=entries,
+            bytes_sent=bytes_sent,
+            error=error,
+        )
+        reconciled.append(save_stored_print_job(job) if changed else job)
+    return reconciled
 
 
 @app.post("/v1/print-jobs", response_model=PrintJobResponse, status_code=202)
@@ -820,7 +968,7 @@ def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
         origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
-        return PrintJobResponse(**stored)
+        return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
     return PrintJobResponse(**_process_stored_print_job(stored))
 
 
@@ -851,7 +999,7 @@ def create_raster_print_job(payload: RasterPrintJobCreateRequest) -> PrintJobRes
         origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
-        return PrintJobResponse(**stored)
+        return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
     return PrintJobResponse(**_process_stored_print_job(stored))
 
 
@@ -883,19 +1031,23 @@ def create_document_print_job(payload: DocumentPrintJobCreateRequest) -> PrintJo
         origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
-        return PrintJobResponse(**stored)
+        return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
     return PrintJobResponse(**_process_stored_print_job(stored))
 
 
 @app.get("/v1/print-jobs", response_model=list[PrintJobResponse])
 def get_print_jobs(limit: int = 50) -> list[PrintJobResponse]:
-    return [PrintJobResponse(**job) for job in list_stored_print_jobs(limit)]
+    return [
+        PrintJobResponse(**job)
+        for job in _reconcile_stored_print_jobs(list_stored_print_jobs(limit))
+    ]
 
 
 @app.get("/v1/print-jobs/{job_id}", response_model=PrintJobResponse)
 def get_print_job(job_id: str) -> PrintJobResponse:
     try:
-        return PrintJobResponse(**load_stored_print_job(job_id))
+        stored = load_stored_print_job(job_id)
+        return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Print job not found") from None
     except ValueError as exc:

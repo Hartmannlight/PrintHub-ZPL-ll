@@ -57,6 +57,63 @@ def test_unknown_remote_state_is_never_reported_as_confirmed(monkeypatch):
     assert receipt.state is DeliveryState.UNCONFIRMED
 
 
+def test_http_fleet_reads_selected_delivery_states_in_one_request(monkeypatch):
+    captured = {}
+
+    def request(method, url, **kwargs):
+        captured.update(method=method, url=url, **kwargs)
+        return Response(
+            [
+                {
+                    "id": "delivery-2",
+                    "state": "transport_accepted",
+                    "bytes_accepted": 42,
+                    "error": None,
+                },
+                {
+                    "id": "delivery-1",
+                    "state": "vendor_magic",
+                    "bytes_accepted": 0,
+                    "error": "Unknown remote state",
+                },
+            ]
+        )
+
+    monkeypatch.setattr("zplgrid.fleet.http.requests.request", request)
+
+    states = HttpPrinterFleetAdapter("http://fleet").get_deliveries(
+        ["delivery-1", "delivery-2"]
+    )
+
+    assert captured["method"] == "GET"
+    assert captured["url"] == "http://fleet/v1/deliveries"
+    assert captured["params"] == [
+        ("delivery_id", "delivery-1"),
+        ("delivery_id", "delivery-2"),
+    ]
+    assert states["delivery-1"].state is DeliveryState.UNCONFIRMED
+    assert states["delivery-1"].error == "Unknown remote state"
+    assert states["delivery-2"].state is DeliveryState.TRANSPORT_ACCEPTED
+    assert states["delivery-2"].bytes_accepted == 42
+
+
+def test_http_fleet_chunks_large_delivery_status_reads(monkeypatch):
+    batches = []
+
+    def request(_method, _url, **kwargs):
+        batches.append(kwargs["params"])
+        return Response([])
+
+    monkeypatch.setattr("zplgrid.fleet.http.requests.request", request)
+
+    states = HttpPrinterFleetAdapter("http://fleet").get_deliveries(
+        [f"delivery-{number}" for number in range(205)]
+    )
+
+    assert states == {}
+    assert [len(batch) for batch in batches] == [100, 100, 5]
+
+
 def test_missing_printer_is_exposed_as_catalog_miss(monkeypatch):
     response = Response({"detail": "not found"})
     response.status_code = 404

@@ -75,6 +75,46 @@ class HttpPrinterFleetAdapter:
     def get_printer(self, printer_id: str) -> dict[str, Any]:
         return self._request("GET", f"/v1/printers/{printer_id}").json()
 
+    @staticmethod
+    def _delivery_receipt(payload: Mapping[str, Any]) -> DeliveryReceipt:
+        state_value = str(payload.get("state") or "unconfirmed")
+        try:
+            state = DeliveryState(state_value)
+        except ValueError:
+            state = DeliveryState.UNCONFIRMED
+        return DeliveryReceipt(
+            bytes_accepted=int(payload.get("bytes_accepted") or 0),
+            state=state,
+            delivery_id=str(payload["id"]),
+            downstream_state=state_value,
+            error=str(payload["error"]) if payload.get("error") else None,
+        )
+
+    def get_deliveries(
+        self, delivery_ids: list[str]
+    ) -> dict[str, DeliveryReceipt]:
+        selected = list(dict.fromkeys(delivery_ids))
+        if not selected:
+            return {}
+        requested = set(selected)
+        receipts: dict[str, DeliveryReceipt] = {}
+        for offset in range(0, len(selected), 100):
+            batch = selected[offset : offset + 100]
+            payload = self._request(
+                "GET",
+                "/v1/deliveries",
+                params=[("delivery_id", delivery_id) for delivery_id in batch],
+            ).json()
+            if not isinstance(payload, list):
+                raise RuntimeError("PrinterFleet returned an invalid delivery list")
+            for item in payload:
+                if not isinstance(item, dict) or not item.get("id"):
+                    raise RuntimeError("PrinterFleet returned an invalid delivery")
+                delivery_id = str(item["id"])
+                if delivery_id in requested:
+                    receipts[delivery_id] = self._delivery_receipt(item)
+        return receipts
+
     def deliver(
         self,
         artifact: PrintArtifact,
@@ -95,14 +135,4 @@ class HttpPrinterFleetAdapter:
                 },
             },
         ).json()
-        state_value = str(response["state"])
-        try:
-            state = DeliveryState(state_value)
-        except ValueError:
-            state = DeliveryState.UNCONFIRMED
-        return DeliveryReceipt(
-            bytes_accepted=int(response.get("bytes_accepted", 0)),
-            state=state,
-            delivery_id=str(response["id"]),
-            downstream_state=state_value,
-        )
+        return self._delivery_receipt(response)

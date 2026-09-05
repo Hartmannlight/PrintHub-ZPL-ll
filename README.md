@@ -259,8 +259,10 @@ Templates are stored under `templates/` (override with `ZPLGRID_TEMPLATES_DIR`).
 For saved templates, prefer the persistent job API:
 
 - `POST /v1/print-jobs` creates a job before rendering and dispatch.
-- `GET /v1/print-jobs` lists recent jobs.
-- `GET /v1/print-jobs/{job_id}` returns its status and downstream job ID.
+- `GET /v1/print-jobs` lists recent jobs and reconciles their current Fleet
+  states in batches.
+- `GET /v1/print-jobs/{job_id}` returns its reconciled status and downstream
+  delivery records.
 - `POST /v1/print-jobs/{job_id}/retry` explicitly retries a failed job.
 - `POST /v1/print-jobs/raster` accepts physical-size-aware PNG, JPEG or PGM
   pages and creates the same durable job before any hardware I/O.
@@ -286,6 +288,16 @@ template editing, rendering and already persisted logical jobs remain intact.
 Jobs are stored under `ZPLGRID_PRINT_JOBS_DIR` (default
 `/data/print-jobs`). An optional `idempotency_key` prevents duplicate printing
 when a caller retries the same business event.
+
+Every Fleet delivery is retained in `downstream_jobs`; multi-page documents
+therefore keep one independently auditable delivery per label. The legacy
+`downstream_job_id` and `downstream_job_state` fields continue to expose the
+first delivery. Logical status is aggregated conservatively: any
+`unconfirmed` delivery makes the job `unconfirmed`, then `failed`, then active
+`queued` states; only fully accepted/confirmed sets advance to
+`transport_accepted` or `confirmed`. If Fleet is temporarily unavailable, reads
+remain available with the last persisted snapshot rather than inventing a new
+outcome.
 
 - `POST /v1/print-jobs`
   - Body: `{ "printer_id": "...", "template_id": "...", "variables": {...} }`

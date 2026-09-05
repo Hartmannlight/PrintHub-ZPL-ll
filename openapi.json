@@ -842,6 +842,40 @@
         ],
         "title": "DocumentPrintJobCreateRequest"
       },
+      "DownstreamJobResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "bytes_accepted": {
+            "type": "integer",
+            "title": "Bytes Accepted",
+            "default": 0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "DownstreamJobResponse"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1109,6 +1143,13 @@
               }
             ],
             "title": "Downstream Job State"
+          },
+          "downstream_jobs": {
+            "items": {
+              "$ref": "#/components/schemas/DownstreamJobResponse"
+            },
+            "type": "array",
+            "title": "Downstream Jobs"
           },
           "preview_png_base64": {
             "anyOf": [

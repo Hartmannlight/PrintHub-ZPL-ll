@@ -6,7 +6,7 @@ import base64
 from PIL import Image
 import pytest
 
-from zplgrid import api
+from zplgrid import api, print_jobs_store
 from zplgrid.printing.domain import (
     ContentOptimize,
     DitherMode,
@@ -204,6 +204,61 @@ def test_raster_job_rejects_invalid_base64_before_persisting(tmp_path, monkeypat
     with pytest.raises(api.HTTPException) as exc:
         api.create_raster_print_job(request)
     assert exc.value.status_code == 400
+
+
+def test_multi_page_raster_job_persists_every_downstream_delivery(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
+    fleet = object()
+    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+
+    def dispatch(_printer_config, prepared, *, copies, delivery_port, idempotency_key_prefix):
+        assert len(prepared) == 2
+        assert copies == 1
+        assert delivery_port is fleet
+        assert idempotency_key_prefix.endswith("/attempt-1")
+        return DocumentDispatchResult(
+            bytes_sent=84,
+            previews=tuple(page.preview_png for page in prepared),
+            downstream_job_ids=("delivery-1", "delivery-2"),
+            downstream_job_states=("queued", "queued"),
+        )
+
+    monkeypatch.setattr(api, "dispatch_raster_document", dispatch)
+    encoded = base64.b64encode(_png()).decode("ascii")
+    request = api.RasterPrintJobCreateRequest(
+        printer_id="demo",
+        pages=[
+            api.RasterPageRequest(
+                mime_type="image/png",
+                data_base64=encoded,
+                width_mm=50,
+                height_mm=50,
+            ),
+            api.RasterPageRequest(
+                mime_type="image/png",
+                data_base64=encoded,
+                width_mm=50,
+                height_mm=50,
+            ),
+        ],
+    )
+
+    created = api.create_raster_print_job(request)
+
+    assert created.status == "queued"
+    assert created.downstream_job_id == "delivery-1"
+    assert [item.id for item in created.downstream_jobs] == [
+        "delivery-1",
+        "delivery-2",
+    ]
+    stored = print_jobs_store.load_job(created.id)
+    assert [item["id"] for item in stored["downstream_jobs"]] == [
+        "delivery-1",
+        "delivery-2",
+    ]
 
 
 def test_source_document_is_persisted_then_held_by_printhub_policy(tmp_path, monkeypatch) -> None:
