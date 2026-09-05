@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 from typing import Any, Mapping
 import uuid
 
@@ -63,6 +64,66 @@ class HttpPrinterFleetAdapter:
             "PATCH",
             f"/v1/printers/{printer_id}",
             json={"revision": revision, "settings": dict(settings)},
+        ).json()
+
+    def get_status(self, printer_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/printers/{printer_id}/status").json()
+
+    def list_agents(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/v1/agents").json()
+
+    def discover_agents(self, urls: list[str] | None = None) -> dict[str, Any]:
+        return self._request(
+            "POST", "/v1/agents/discover", json={"urls": urls or []}
+        ).json()
+
+    def export_printers(self) -> dict[str, Any]:
+        return self._request("GET", "/v1/printer-registry/export").json()
+
+    def import_printers(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST", "/v1/printer-registry/import", json=dict(document)
+        ).json()
+
+    def register_discovered_printer(
+        self,
+        *,
+        base_url: str,
+        printer_id: str,
+        expected_agent_id: str | None,
+        name: str | None,
+    ) -> dict[str, Any]:
+        discovery = self.discover_agents([base_url])
+        normalized = base_url.rstrip("/")
+        agent = next(
+            (
+                item
+                for item in discovery.get("agents", [])
+                if item.get("available") and str(item.get("base_url", "")).rstrip("/") == normalized
+            ),
+            None,
+        )
+        if agent is None:
+            raise RuntimeError("PrintAgent was not available during registration")
+        agent_id = str(agent["id"])
+        if expected_agent_id and expected_agent_id != agent_id:
+            raise FleetConflict("PrintAgent identity changed since discovery")
+        device = next(
+            (item for item in agent.get("printers", []) if item.get("id") == printer_id),
+            None,
+        )
+        if device is None:
+            raise KeyError(printer_id)
+        if device.get("registered_id"):
+            return self.get_printer(str(device["registered_id"]))
+        existing_ids = {printer["id"] for printer in self.list_printers()}
+        candidate = re.sub(r"[^A-Za-z0-9_.-]+", "-", printer_id).strip("-") or "printer"
+        if candidate in existing_ids:
+            candidate = re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{agent_id}-{printer_id}").strip("-")
+        return self._request(
+            "POST",
+            f"/v1/agents/{agent_id}/printers/{printer_id}/register",
+            json={"public_id": candidate, "name": name},
         ).json()
 
     def deliver(

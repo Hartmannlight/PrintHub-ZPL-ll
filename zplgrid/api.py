@@ -23,7 +23,7 @@ from .labelary import render_labelary_png_bytes
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
-from .printer_io import apply_printer_settings, query_raw_command
+from .printer_io import apply_printer_settings
 from .printer_media import resolve_dynamic_printer_media
 from .printer_registry import PrinterRegistry, RegistryConflict, normalize_agent_url
 from .printer_discovery import discover_printers, inspect_agent
@@ -50,7 +50,6 @@ from .printing.service import (
 )
 from .render import RenderOptions, render_text
 from .templates_store import load_template_entry, list_templates, save_template_entry, seed_bundled_templates, update_template_entry
-from .zebra_tamer import get_snapshot
 
 
 class RenderTarget(BaseModel):
@@ -470,12 +469,6 @@ def _ensure_printer_enabled(printer: Mapping[str, Any]) -> None:
         raise HTTPException(status_code=409, detail='Printer is disabled')
 
 
-def _ensure_printer_supports_status(printer: Mapping[str, Any]) -> None:
-    caps = printer.get('capabilities') or {}
-    if not caps.get('supports_status', False):
-        raise HTTPException(status_code=409, detail='Printer status is not supported')
-
-
 def _printer_target(printer: Mapping[str, Any]) -> RenderTarget:
     resolved = resolve_dynamic_printer_media(printer)
     media_loaded = (resolved.get('media') or {}).get('loaded') or {}
@@ -521,151 +514,6 @@ def _render_preview_or_error(zpl: str, *, dpmm: int, width_in: float, height_in:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return base64.b64encode(image_bytes).decode('ascii')
-
-
-def _clean_status_text(text: str) -> str:
-    cleaned = text.replace('\x02', '').replace('\x03', '')
-    return cleaned.strip()
-
-
-def _parse_host_status(raw: str) -> list[list[str]]:
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    return [line.split(',') for line in lines]
-
-
-def _parse_host_diagnostic(raw: str) -> dict[str, str]:
-    info: dict[str, str] = {}
-    for line in raw.splitlines():
-        if '=' in line:
-            key, value = line.split('=', 1)
-            info[key.strip()] = value.strip()
-    return info
-
-
-def _parse_host_identification(raw: str) -> dict[str, str]:
-    parts = [p.strip() for p in raw.split(',') if p.strip()]
-    result: dict[str, str] = {}
-    if len(parts) >= 1:
-        result['model'] = parts[0]
-    if len(parts) >= 2:
-        result['firmware'] = parts[1]
-    if len(parts) >= 3:
-        result['dpmm'] = parts[2]
-    if len(parts) >= 4:
-        result['memory'] = parts[3]
-    return result
-
-
-def _parse_host_inventory(raw: str) -> dict[str, str]:
-    info: dict[str, str] = {}
-    for line in raw.splitlines():
-        line = line.strip()
-        if line.startswith('ERRORS:'):
-            _, rest = line.split(':', 1)
-            info['errors'] = rest.strip()
-        elif line.startswith('WARNINGS:'):
-            _, rest = line.split(':', 1)
-            info['warnings'] = rest.strip()
-    return info
-
-
-def _parse_int(value: str) -> Optional[int]:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _split_status_list(value: Optional[str]) -> list[str]:
-    if not value:
-        return []
-    parts = [part.strip() for part in value.replace(';', ',').split(',')]
-    return [part for part in parts if part and part.lower() not in ('none', 'n/a', 'na')]
-
-
-def _normalize_host_status(raw: str) -> dict[str, Any]:
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    normalized_lines: list[dict[str, Any]] = []
-    for line in lines:
-        fields = [field.strip() for field in line.split(',')]
-        field_entries: list[dict[str, Any]] = []
-        for idx, field in enumerate(fields):
-            entry: dict[str, Any] = {'index': idx, 'value': field}
-            value_int = _parse_int(field)
-            if value_int is not None:
-                entry['value_int'] = value_int
-            field_entries.append(entry)
-        normalized_lines.append(
-            {
-                'raw': line,
-                'fields': field_entries,
-                'field_count': len(fields),
-            }
-        )
-    return {'lines': normalized_lines}
-
-
-def _normalize_host_diagnostic(raw: str) -> dict[str, Any]:
-    parsed = _parse_host_diagnostic(raw)
-    entries = [{'key': key, 'value': value} for key, value in parsed.items()]
-    return {'map': parsed, 'entries': entries}
-
-
-def _normalize_host_identification(raw: str) -> dict[str, Any]:
-    parsed = _parse_host_identification(raw)
-    dpmm_raw = parsed.get('dpmm')
-    dpmm = _parse_int(dpmm_raw) if isinstance(dpmm_raw, str) else None
-    return {
-        'model': parsed.get('model'),
-        'firmware': parsed.get('firmware'),
-        'dpmm': dpmm,
-        'dpmm_raw': dpmm_raw,
-        'memory': parsed.get('memory'),
-    }
-
-
-def _normalize_host_inventory(raw: str) -> dict[str, Any]:
-    parsed = _parse_host_inventory(raw)
-    errors = _split_status_list(parsed.get('errors'))
-    warnings = _split_status_list(parsed.get('warnings'))
-    return {
-        'errors': errors,
-        'warnings': warnings,
-        'has_errors': bool(errors),
-        'has_warnings': bool(warnings),
-    }
-
-
-def _build_status_summary(normalized: Mapping[str, Any]) -> dict[str, Any]:
-    identification = normalized.get('host_identification') or {}
-    inventory = normalized.get('host_inventory') or {}
-    errors = list(inventory.get('errors') or [])
-    warnings = list(inventory.get('warnings') or [])
-    return {
-        'model': identification.get('model'),
-        'firmware': identification.get('firmware'),
-        'dpmm': identification.get('dpmm'),
-        'memory': identification.get('memory'),
-        'errors': errors,
-        'warnings': warnings,
-        'has_errors': bool(errors),
-        'has_warnings': bool(warnings),
-    }
-
-
-def _normalize_status_payload(raw_results: Mapping[str, str]) -> dict[str, Any]:
-    host_status_raw = raw_results.get('host_status', '')
-    host_diagnostic_raw = raw_results.get('host_diagnostic', '')
-    host_identification_raw = raw_results.get('host_identification', '')
-    host_inventory_raw = raw_results.get('host_inventory', '')
-    normalized = {
-        'host_status': _normalize_host_status(host_status_raw),
-        'host_diagnostic': _normalize_host_diagnostic(host_diagnostic_raw),
-        'host_identification': _normalize_host_identification(host_identification_raw),
-        'host_inventory': _normalize_host_inventory(host_inventory_raw),
-    }
-    normalized['summary'] = _build_status_summary(normalized)
-    return normalized
 
 
 @app.post("/v1/printers/{printer_id}/prints/zpl", response_model=PrintResponse)
@@ -1027,69 +875,14 @@ def retry_print_job(job_id: str) -> PrintJobResponse:
 
 @app.get("/v1/printers/{printer_id}/status", response_model=PrinterStatusResponse)
 def get_printer_status(printer_id: str) -> PrinterStatusResponse:
-    printer = _get_printer(printer_id)
-    _ensure_printer_enabled(printer)
-    _ensure_printer_supports_status(printer)
-
-    connection = printer.get('connection') or {}
-    if connection.get('protocol') == 'zebra_tamer':
-        try:
-            snapshot = get_snapshot(connection)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except (OSError, RuntimeError) as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return PrinterStatusResponse(
-            printer_id=printer_id,
-            raw={},
-            parsed=snapshot,
-            normalized={
-                'summary': {
-                    'model': ((snapshot.get('identity') or {}).get('model') or {}).get('value'),
-                    'firmware': ((snapshot.get('identity') or {}).get('firmware') or {}).get('value'),
-                    'ready': ((snapshot.get('status') or {}).get('ready') or {}).get('value'),
-                    'media_out': ((snapshot.get('status') or {}).get('media_out') or {}).get('value'),
-                    'head_open': ((snapshot.get('status') or {}).get('head_open') or {}).get('value'),
-                    'job_state': ((snapshot.get('jobs') or {}).get('last_job_state')),
-                },
-                'zebra_tamer_snapshot': snapshot,
-            },
-        )
-
-    commands = {
-        'host_status': '~HS',
-        'host_diagnostic': '~HD',
-        'host_identification': '~HI',
-        'host_inventory': '~HQES',
-    }
-
-    raw_results: dict[str, str] = {}
-    parsed_results: dict[str, Any] = {}
-    for key, cmd in commands.items():
-        try:
-            raw_text = _clean_status_text(query_raw_command(printer, cmd))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except OSError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-        raw_results[key] = raw_text
-        if key == 'host_status':
-            parsed_results[key] = _parse_host_status(raw_text)
-        elif key == 'host_diagnostic':
-            parsed_results[key] = _parse_host_diagnostic(raw_text)
-        elif key == 'host_identification':
-            parsed_results[key] = _parse_host_identification(raw_text)
-        elif key == 'host_inventory':
-            parsed_results[key] = _parse_host_inventory(raw_text)
-
-    normalized_results = _normalize_status_payload(raw_results)
-    return PrinterStatusResponse(
-        printer_id=printer_id,
-        raw=raw_results,
-        parsed=parsed_results,
-        normalized=normalized_results,
-    )
+    try:
+        return PrinterStatusResponse(**_fleet().get_status(printer_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Printer not found: {printer_id}") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/v1/templates", response_model=TemplateDetailResponse)
@@ -1315,6 +1108,9 @@ def get_printers() -> PrintersConfigResponse:
 
 @app.get("/v1/zebra-tamer/agents")
 def get_zebra_tamer_agents() -> dict[str, Any]:
+    fleet = _fleet()
+    if isinstance(fleet, HttpPrinterFleetAdapter):
+        return {"agents": fleet.list_agents(), "warning": None}
     return discover_printers(_registry())
 
 
@@ -1325,6 +1121,9 @@ class AgentDiscoveryRequest(BaseModel):
 @app.post('/v1/zebra-tamer/discover')
 def discover_manual_agent(payload: AgentDiscoveryRequest) -> dict[str, Any]:
     try:
+        fleet = _fleet()
+        if isinstance(fleet, HttpPrinterFleetAdapter):
+            return fleet.discover_agents([payload.base_url])
         return discover_printers(_registry(), [normalize_agent_url(payload.base_url)])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1343,6 +1142,14 @@ class PrinterRegistrationRequest(BaseModel):
 @app.post('/v1/printers/register')
 def register_discovered_printer(payload: PrinterRegistrationRequest) -> dict[str, Any]:
     try:
+        fleet = _fleet()
+        if isinstance(fleet, HttpPrinterFleetAdapter):
+            return fleet.register_discovered_printer(
+                base_url=payload.base_url,
+                printer_id=payload.printer_id,
+                expected_agent_id=payload.agent_id,
+                name=payload.name,
+            )
         agent = inspect_agent(payload.base_url)
         if payload.agent_id is not None and agent['agent_id'] != payload.agent_id:
             raise RegistryConflict('Agent identity changed since discovery; refresh before registering')
@@ -1377,14 +1184,24 @@ def register_discovered_printer(payload: PrinterRegistrationRequest) -> dict[str
 
 @app.get('/v1/printer-registry/export')
 def export_printers() -> Response:
-    return Response(yaml.safe_dump(_registry().export(), sort_keys=False, allow_unicode=True),
+    fleet = _fleet()
+    document = (
+        fleet.export_printers()
+        if isinstance(fleet, HttpPrinterFleetAdapter)
+        else _registry().export()
+    )
+    return Response(yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
                     media_type='application/yaml', headers={'Content-Disposition': 'attachment; filename="printers.yml"'})
 
 
 @app.post('/v1/printer-registry/import', response_model=PrintersConfigResponse)
 def import_printers(payload: dict[str, Any]) -> PrintersConfigResponse:
     try:
-        _registry().import_config(payload)
+        fleet = _fleet()
+        if isinstance(fleet, HttpPrinterFleetAdapter):
+            fleet.import_printers(payload)
+        else:
+            _registry().import_config(payload)
     except RegistryConflict:
         raise
     except ValueError as exc:

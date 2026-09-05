@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..printer_io import dispatch_zpl
+from ..printer_io import dispatch_zpl, query_raw_command
 from ..printer_media import resolve_dynamic_printer_media
 from ..printer_registry import PrinterRegistry
+from ..zebra_tamer import get_snapshot
 from .ports import DeliveryReceipt, DeliveryState, PrintArtifact
 
 
@@ -65,6 +66,47 @@ class LegacyFleetAdapter:
         revision: int,
     ) -> dict[str, Any]:
         return self._catalog().patch(printer_id, dict(settings), revision)
+
+    def get_status(self, printer_id: str) -> dict[str, Any]:
+        printer = self.get_printer(printer_id)
+        connection = printer.get("connection") or {}
+        if connection.get("protocol") == "zebra_tamer":
+            snapshot = get_snapshot(connection)
+            return {
+                "printer_id": printer_id,
+                "raw": {},
+                "parsed": snapshot,
+                "normalized": {
+                    "summary": {
+                        "model": ((snapshot.get("identity") or {}).get("model") or {}).get("value"),
+                        "firmware": ((snapshot.get("identity") or {}).get("firmware") or {}).get("value"),
+                        "ready": ((snapshot.get("status") or {}).get("ready") or {}).get("value"),
+                    },
+                    "agent_snapshot": snapshot,
+                },
+            }
+        commands = {
+            "host_status": "~HS",
+            "host_diagnostic": "~HD",
+            "host_identification": "~HI",
+            "host_inventory": "~HQES",
+        }
+        raw = {
+            name: query_raw_command(printer, command).replace("\x02", "").replace("\x03", "").strip()
+            for name, command in commands.items()
+        }
+        identity = [part.strip() for part in raw["host_identification"].split(",")]
+        return {
+            "printer_id": printer_id,
+            "raw": raw,
+            "parsed": {"host_status": [line.split(",") for line in raw["host_status"].splitlines()]},
+            "normalized": {
+                "summary": {
+                    "model": identity[0] if identity else None,
+                    "firmware": identity[1] if len(identity) > 1 else None,
+                }
+            },
+        }
 
     def deliver(
         self,

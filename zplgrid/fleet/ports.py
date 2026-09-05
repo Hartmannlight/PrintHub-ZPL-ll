@@ -81,10 +81,15 @@ class PrinterAdministrationPort(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class PrinterStatusPort(Protocol):
+    def get_status(self, printer_id: str) -> dict[str, Any]: ...
+
+
 class PrinterFleetPort(
     ArtifactDeliveryPort,
     PrinterCatalogPort,
     PrinterAdministrationPort,
+    PrinterStatusPort,
     Protocol,
 ):
     """Complete boundary used by PrintHub for printer reads and delivery."""
