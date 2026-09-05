@@ -66,7 +66,8 @@ def find_by_idempotency_key(key: str) -> dict[str, Any] | None:
 def create_job(
     *,
     printer_id: str,
-    template_id: str,
+    template_id: str | None,
+    template: dict[str, Any] | None = None,
     variables: dict[str, Any],
     target: dict[str, Any] | None,
     idempotency_key: str | None,
@@ -81,10 +82,11 @@ def create_job(
         now = _now()
         payload: dict[str, Any] = {
             "id": str(uuid.uuid4()),
-            "source_kind": "template",
+            "source_kind": "inline_template" if template is not None else "template",
             "status": "queued",
             "printer_id": printer_id,
             "template_id": template_id,
+            "template": template,
             "variables": variables,
             "target": target,
             "idempotency_key": idempotency_key,

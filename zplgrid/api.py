@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import yaml
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
@@ -422,12 +422,19 @@ class PrintResponse(BaseModel):
 
 class PrintJobCreateRequest(BaseModel):
     printer_id: str
-    template_id: str
+    template_id: Optional[str] = None
+    template: Optional[dict[str, Any]] = None
     variables: dict[str, Any] = Field(default_factory=dict)
     target: Optional[RenderTarget] = None
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
     origin_reference: Optional[str] = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def require_one_template_source(self) -> "PrintJobCreateRequest":
+        if (self.template_id is None) == (self.template is None):
+            raise ValueError("Provide exactly one of template_id or template")
+        return self
 
 
 class RasterPageRequest(BaseModel):
@@ -878,8 +885,11 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
     try:
         if job.get("source_kind") in {"raster", "document"}:
             return _record_integration_state(_process_raster_job(job))
-        entry = load_template_entry(str(job["template_id"]))
-        template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
+        if job.get("source_kind") == "inline_template":
+            template_json = dict(job["template"])
+        else:
+            entry = load_template_entry(str(job["template_id"]))
+            template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
         target_payload = job.get("target")
         delivery_attempt = int(job.get("delivery_attempts") or 0) + 1
         job["delivery_attempts"] = delivery_attempt
@@ -910,6 +920,7 @@ def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
     stored = create_stored_print_job(
         printer_id=payload.printer_id,
         template_id=payload.template_id,
+        template=payload.template,
         variables=payload.variables,
         target=payload.target.model_dump() if payload.target else None,
         idempotency_key=payload.idempotency_key,

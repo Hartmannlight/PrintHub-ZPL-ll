@@ -1398,8 +1398,27 @@
             "title": "Printer Id"
           },
           "template_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Template Id"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template"
           },
           "variables": {
             "additionalProperties": true,
@@ -1455,8 +1474,7 @@
         },
         "type": "object",
         "required": [
-          "printer_id",
-          "template_id"
+          "printer_id"
         ],
         "title": "PrintJobCreateRequest"
       },

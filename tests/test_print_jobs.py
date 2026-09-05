@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from zplgrid import api
 from zplgrid import print_jobs_store
 
@@ -59,6 +62,48 @@ def test_failed_print_job_can_be_retried(tmp_path, monkeypatch) -> None:
     assert failed.error == "offline"
     assert retried.status == "sent"
     assert retried.attempts == 2
+
+
+def test_inline_template_is_snapshotted_in_durable_job(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    captured: list[dict] = []
+
+    def fake_print_template(printer_id, payload):
+        captured.append(payload.template)
+        return api.PrintResponse(printer_id=printer_id, bytes_sent=12)
+
+    monkeypatch.setattr(api, "print_template", fake_print_template)
+    template = {
+        "schema_version": 1,
+        "name": "Unsaved draft",
+        "layout": {"kind": "leaf", "elements": [{"type": "text", "text": "Hello"}]},
+    }
+    created = api.create_print_job(
+        api.PrintJobCreateRequest(
+            printer_id="demo",
+            template=template,
+            variables={"title": "Draft"},
+            origin="printhub-studio",
+        )
+    )
+
+    stored = print_jobs_store.load_job(created.id)
+    assert created.source_kind == "inline_template"
+    assert stored["template"] == template
+    assert captured == [template]
+
+
+@pytest.mark.parametrize(
+    ("template_id", "template"),
+    [(None, None), ("saved", {"schema_version": 1})],
+)
+def test_print_job_requires_exactly_one_template_source(template_id, template) -> None:
+    with pytest.raises(ValidationError, match="exactly one"):
+        api.PrintJobCreateRequest(
+            printer_id="demo",
+            template_id=template_id,
+            template=template,
+        )
 
 
 def test_interrupted_job_requires_explicit_retry(tmp_path, monkeypatch) -> None:
