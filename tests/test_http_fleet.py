@@ -25,7 +25,7 @@ def test_http_fleet_sends_versioned_artifact_contract(monkeypatch):
 
     def request(method, url, **kwargs):
         captured.update(method=method, url=url, **kwargs)
-        return Response({"id": "delivery-1", "state": "transport_accepted", "bytes_accepted": 6})
+        return Response({"id": "delivery-1", "state": "queued", "bytes_accepted": 0})
 
     monkeypatch.setattr("zplgrid.fleet.http.requests.request", request)
     adapter = HttpPrinterFleetAdapter("http://fleet:8000/")
@@ -38,7 +38,8 @@ def test_http_fleet_sends_versioned_artifact_contract(monkeypatch):
     assert captured["json"]["idempotency_key"] == "job-1/attempt-1"
     assert captured["headers"]["X-Correlation-ID"]
     assert base64.b64decode(captured["json"]["artifact"]["payload_base64"]) == b"^XA^XZ"
-    assert receipt.state is DeliveryState.TRANSPORT_ACCEPTED
+    assert receipt.state is DeliveryState.QUEUED
+    assert receipt.bytes_accepted == 0
     assert receipt.delivery_id == "delivery-1"
 
 
