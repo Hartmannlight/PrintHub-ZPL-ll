@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -43,13 +44,19 @@ def main():
                 assert b'/api' in response.read()
         elif SERVICE == 'hub':
             assert json.loads(data)['status'] == 'ok'
-            with urllib.request.urlopen(base + '/v1/printers', timeout=3) as response:
-                assert isinstance(json.load(response)['printers'], list)
+            with urllib.request.urlopen(base + '/openapi.json', timeout=3) as response:
+                assert '/v1/printers' in json.load(response)['paths']
+            try:
+                urllib.request.urlopen(base + '/v1/printers', timeout=3)
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 503
+            else:
+                raise AssertionError('Printer catalog must fail closed without PrinterFleet')
         else:
             assert json.loads(data)['status'] == 'ok'
             with urllib.request.urlopen(base + '/api/settings', timeout=3) as response:
                 assert json.load(response)['dpmm'] > 0
-        print(f'{SERVICE}: runtime health and API smoke passed')
+        print(f'{SERVICE}: runtime health and boundary smoke passed')
     finally:
         logs = subprocess.run(['docker', 'logs', container], capture_output=True, text=True)
         Path('artifacts/container.log').write_text(logs.stdout + logs.stderr)
