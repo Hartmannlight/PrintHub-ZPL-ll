@@ -6,7 +6,9 @@ import json
 import os
 import logging
 import threading
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from fastapi import FastAPI, HTTPException, Response
@@ -20,6 +22,12 @@ from .compiler import Compiler
 from .fleet import FleetConflict, HttpPrinterFleetAdapter, PrinterFleetPort, PrintArtifact
 from .fleet.legacy import LegacyFleetAdapter
 from .labelary import render_labelary_png_bytes
+from .integration_events import (
+    IntegrationEventStore,
+    IntegrationEventWorker,
+    ThingdexEventPublisher,
+    event_id as integration_event_id,
+)
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
@@ -111,6 +119,56 @@ class PrintersConfigResponse(BaseModel):
     default_printer_id: str | None = None
 
 
+def _integration_event_store() -> IntegrationEventStore:
+    configured = os.getenv("PRINTHUB_INTEGRATION_EVENTS_DIR", "").strip()
+    path = Path(configured) if configured else Path(
+        os.getenv("ZPLGRID_PRINT_JOBS_DIR", "/data/print-jobs")
+    ) / "integration-events"
+    current = getattr(app.state, "integration_event_store", None)
+    if current is None or current.path != path:
+        current = IntegrationEventStore(path)
+        app.state.integration_event_store = current
+    return current
+
+
+def _record_integration_state(job: dict[str, Any]) -> dict[str, Any]:
+    if job.get("origin") != "thingdex" or not job.get("origin_reference"):
+        return job
+    try:
+        intent_id = str(uuid.UUID(str(job["origin_reference"])))
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "Ignoring Thingdex callback for invalid origin reference on job %s",
+            job.get("id"),
+        )
+        return job
+    if job.get("integration_last_state") == job.get("status"):
+        return job
+    sequence = int(job.get("integration_sequence") or 0) + 1
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "event_id": integration_event_id(str(job["id"]), sequence),
+        "intent_id": intent_id,
+        "sequence": sequence,
+        "job_id": str(job["id"]),
+        "job_state": str(job["status"]),
+        "occurred_at": occurred_at,
+        "detail": {
+            "downstream_job_id": job.get("downstream_job_id"),
+            "downstream_job_state": job.get("downstream_job_state"),
+            "error": job.get("error"),
+            "warning": job.get("warning"),
+        },
+    }
+    # Persist the event first. A crash before updating the job can only enqueue
+    # the same deterministic event again, never lose the state transition.
+    _integration_event_store().enqueue(payload)
+    updated = dict(job)
+    updated["integration_sequence"] = sequence
+    updated["integration_last_state"] = job["status"]
+    return save_stored_print_job(updated)
+
+
 @app.on_event("startup")
 def _load_printers_config_on_startup() -> None:
     recover_interrupted_jobs()
@@ -125,6 +183,23 @@ def _load_printers_config_on_startup() -> None:
             if fleet_api_url
             else LegacyFleetAdapter(registry)
         )
+        event_url = os.getenv("PRINTHUB_THINGDEX_EVENT_URL", "").strip()
+        event_secret = os.getenv("PRINTHUB_THINGDEX_EVENT_SECRET", "").strip()
+        if bool(event_url) != bool(event_secret):
+            raise RuntimeError(
+                "PRINTHUB_THINGDEX_EVENT_URL and PRINTHUB_THINGDEX_EVENT_SECRET must be configured together"
+            )
+        if event_url:
+            event_worker = IntegrationEventWorker(
+                _integration_event_store(),
+                ThingdexEventPublisher(event_url, event_secret).publish,
+                interval_seconds=float(
+                    os.getenv("PRINTHUB_INTEGRATION_EVENT_INTERVAL_SECONDS", "1")
+                ),
+                max_attempts=int(os.getenv("PRINTHUB_INTEGRATION_EVENT_MAX_ATTEMPTS", "10")),
+            )
+            app.state.integration_event_worker = event_worker
+            event_worker.start()
         interval = max(0, float(os.getenv('ZPLGRID_DISCOVERY_INTERVAL_SECONDS', '30')))
         if interval and not fleet_api_url:
             stopped = threading.Event()
@@ -148,6 +223,9 @@ def stop_printer_discovery() -> None:
     if stopped:
         stopped.set()
         app.state.discovery_worker.join(timeout=1)
+    event_worker = getattr(app.state, "integration_event_worker", None)
+    if event_worker:
+        event_worker.stop()
 
 
 def _registry() -> PrinterRegistry:
@@ -349,6 +427,7 @@ class PrintJobCreateRequest(BaseModel):
     target: Optional[RenderTarget] = None
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
+    origin_reference: Optional[str] = Field(default=None, max_length=255)
 
 
 class RasterPageRequest(BaseModel):
@@ -368,6 +447,7 @@ class RasterPrintJobCreateRequest(BaseModel):
     mismatch_tolerance_mm: float = Field(default=0.5, ge=0, le=20)
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
+    origin_reference: Optional[str] = Field(default=None, max_length=255)
 
 
 class DocumentPrintJobCreateRequest(BaseModel):
@@ -381,6 +461,7 @@ class DocumentPrintJobCreateRequest(BaseModel):
     mismatch_tolerance_mm: float = Field(default=0.5, ge=0, le=20)
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
+    origin_reference: Optional[str] = Field(default=None, max_length=255)
 
 
 class RasterPrintJobReleaseRequest(BaseModel):
@@ -796,7 +877,7 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
     save_stored_print_job(job)
     try:
         if job.get("source_kind") in {"raster", "document"}:
-            return _process_raster_job(job)
+            return _record_integration_state(_process_raster_job(job))
         entry = load_template_entry(str(job["template_id"]))
         template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
         target_payload = job.get("target")
@@ -821,7 +902,7 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         job["status"] = "failed"
         job["error"] = str(detail)
-    return save_stored_print_job(job)
+    return _record_integration_state(save_stored_print_job(job))
 
 
 @app.post("/v1/print-jobs", response_model=PrintJobResponse, status_code=202)
@@ -833,6 +914,7 @@ def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
         target=payload.target.model_dump() if payload.target else None,
         idempotency_key=payload.idempotency_key,
         origin=payload.origin,
+        origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**stored)
@@ -863,6 +945,7 @@ def create_raster_print_job(payload: RasterPrintJobCreateRequest) -> PrintJobRes
         ticket=ticket,
         idempotency_key=payload.idempotency_key,
         origin=payload.origin,
+        origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**stored)
@@ -894,6 +977,7 @@ def create_document_print_job(payload: DocumentPrintJobCreateRequest) -> PrintJo
         ticket=ticket,
         idempotency_key=payload.idempotency_key,
         origin=payload.origin,
+        origin_reference=payload.origin_reference,
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**stored)

@@ -71,6 +71,7 @@ def create_job(
     target: dict[str, Any] | None,
     idempotency_key: str | None,
     origin: str | None,
+    origin_reference: str | None = None,
 ) -> dict[str, Any]:
     with _jobs_lock:
         if idempotency_key:
@@ -88,6 +89,7 @@ def create_job(
             "target": target,
             "idempotency_key": idempotency_key,
             "origin": origin,
+            "origin_reference": origin_reference,
             "attempts": 0,
             "bytes_sent": None,
             "downstream_job_id": None,
@@ -107,6 +109,7 @@ def create_raster_job(
     ticket: dict[str, Any],
     idempotency_key: str | None,
     origin: str | None,
+    origin_reference: str | None = None,
 ) -> dict[str, Any]:
     with _jobs_lock:
         if idempotency_key:
@@ -127,6 +130,7 @@ def create_raster_job(
             "ticket": ticket,
             "idempotency_key": idempotency_key,
             "origin": origin,
+            "origin_reference": origin_reference,
             "attempts": 0,
             "bytes_sent": None,
             "downstream_job_id": None,

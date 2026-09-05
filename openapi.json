@@ -1266,6 +1266,18 @@
               }
             ],
             "title": "Origin"
+          },
+          "origin_reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Reference"
           }
         },
         "type": "object",
@@ -1427,6 +1439,18 @@
               }
             ],
             "title": "Origin"
+          },
+          "origin_reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Reference"
           }
         },
         "type": "object",
@@ -1962,6 +1986,18 @@
               }
             ],
             "title": "Origin"
+          },
+          "origin_reference": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Reference"
           }
         },
         "type": "object",

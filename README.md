@@ -8,6 +8,12 @@ When an external PrinterFleet is configured, set
 that bearer credential and an `X-Correlation-ID` to every catalog and delivery
 request.
 
+Thingdex integration uses a durable PrintHub event outbox. Configure
+`PRINTHUB_THINGDEX_EVENT_URL` and `PRINTHUB_THINGDEX_EVENT_SECRET` together;
+partial configuration fails startup. Jobs submitted with `origin=thingdex` and
+an `origin_reference` UUID enqueue signed, monotonically sequenced status
+events. Delivery retries happen outside the print request and survive restarts.
+
 ## ZebraTamer printers
 
 ZebraTamer is the preferred hardware boundary. Register a printer with:
