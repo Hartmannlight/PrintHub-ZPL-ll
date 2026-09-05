@@ -115,13 +115,15 @@ def create_raster_job(
                 return existing
         now = _now()
         job_id = str(uuid.uuid4())
+        source_kind = "document" if document.get("kind") == "source_document" else "raster"
+        pages = document.get("pages")
         payload: dict[str, Any] = {
             "id": job_id,
-            "source_kind": "raster",
+            "source_kind": source_kind,
             "status": "queued",
             "printer_id": printer_id,
             "template_id": None,
-            "page_count": len(document.get("pages") or []),
+            "page_count": len(pages) if isinstance(pages, list) else None,
             "ticket": ticket,
             "idempotency_key": idempotency_key,
             "origin": origin,

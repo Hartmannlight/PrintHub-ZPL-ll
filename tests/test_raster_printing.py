@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import base64
 
 from PIL import Image
 import pytest
@@ -16,6 +17,7 @@ from zplgrid.printing.domain import (
     ScalingPolicy,
 )
 from zplgrid.printing.raster import encode_zpl_graphic, prepare_raster_page
+from zplgrid.printing.documents import _pdf_sizes, prepare_source_document
 from zplgrid.printing.service import DocumentDispatchResult
 
 
@@ -81,6 +83,25 @@ def test_source_pixel_limit_is_checked_before_decoding(monkeypatch) -> None:
             target=RasterTarget(50, 50, 203),
             scaling=ScalingPolicy.FIT,
         )
+
+
+def test_source_image_is_interpreted_as_target_sized_document() -> None:
+    pages = prepare_source_document(
+        _png(), mime_type="image/png", target=RasterTarget(50, 30, 203)
+    )
+    assert len(pages) == 1
+    assert pages[0].width_mm == 50
+    assert pages[0].height_mm == 30
+
+
+def test_pdf_page_dimensions_are_owned_by_document_preparation() -> None:
+    sizes = _pdf_sizes(
+        "Pages:           2\n"
+        "Page 1 size:     141.732 x 141.732 pts\n"
+        "Page 2 size:     595.276 x 841.89 pts\n"
+    )
+    assert sizes[0] == pytest.approx((50.0, 50.0), abs=0.01)
+    assert sizes[1] == pytest.approx((210.0, 297.0), abs=0.01)
 
 
 def test_adapter_selection_is_explicit_and_future_driver_safe() -> None:
@@ -173,3 +194,29 @@ def test_raster_job_rejects_invalid_base64_before_persisting(tmp_path, monkeypat
     with pytest.raises(api.HTTPException) as exc:
         api.create_raster_print_job(request)
     assert exc.value.status_code == 400
+
+
+def test_source_document_is_persisted_then_held_by_printhub_policy(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
+    monkeypatch.setattr(
+        api,
+        "prepare_source_document",
+        lambda data, **_kwargs: (RasterPageSource(_png(), "image/png", 210, 297),),
+    )
+    request = api.DocumentPrintJobCreateRequest(
+        printer_id="demo",
+        mime_type="application/pdf",
+        data_base64=base64.b64encode(b"%PDF-test").decode("ascii"),
+        idempotency_key="ipp:document:1",
+        origin="ipp",
+    )
+
+    held = api.create_document_print_job(request)
+
+    assert held.source_kind == "document"
+    assert held.status == "held"
+    assert held.page_count == 1
+    persisted = api.load_job_document(held.id)
+    assert persisted["kind"] == "source_document"
+    assert base64.b64decode(persisted["data_base64"]) == b"%PDF-test"

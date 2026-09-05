@@ -44,9 +44,11 @@ from .printing.domain import (
     RasterPageSource,
     ScalingPolicy,
 )
+from .printing.documents import SUPPORTED_DOCUMENT_TYPES, prepare_source_document
 from .printing.service import (
     dispatch_document as dispatch_raster_document,
     prepare_document as prepare_raster_document,
+    target_for_printer,
 )
 from .render import RenderOptions, render_text
 from .templates_store import load_template_entry, list_templates, save_template_entry, seed_bundled_templates, update_template_entry
@@ -359,6 +361,19 @@ class RasterPageRequest(BaseModel):
 class RasterPrintJobCreateRequest(BaseModel):
     printer_id: str = Field(min_length=1, max_length=240)
     pages: list[RasterPageRequest] = Field(min_length=1, max_length=100)
+    copies: int = Field(default=1, ge=1, le=999)
+    scaling: ScalingPolicy = ScalingPolicy.HOLD
+    content_optimize: ContentOptimize = ContentOptimize.AUTO
+    dither: DitherMode = DitherMode.AUTO
+    mismatch_tolerance_mm: float = Field(default=0.5, ge=0, le=20)
+    idempotency_key: Optional[str] = Field(default=None, max_length=240)
+    origin: Optional[str] = Field(default=None, max_length=120)
+
+
+class DocumentPrintJobCreateRequest(BaseModel):
+    printer_id: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(min_length=1, max_length=120)
+    data_base64: str = Field(min_length=1, max_length=48_000_000)
     copies: int = Field(default=1, ge=1, le=999)
     scaling: ScalingPolicy = ScalingPolicy.HOLD
     content_optimize: ContentOptimize = ContentOptimize.AUTO
@@ -693,11 +708,39 @@ def _decode_raster_pages(document: Mapping[str, Any]) -> list[RasterPageSource]:
     return pages
 
 
+def _decode_source_document(document: Mapping[str, Any]) -> tuple[bytes, str]:
+    try:
+        data = base64.b64decode(str(document["data_base64"]), validate=True)
+        mime_type = str(document["mime_type"]).split(";", 1)[0].strip().lower()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Invalid persisted source document") from exc
+    maximum_bytes = max(
+        1, int(os.getenv("ZPLGRID_MAX_SOURCE_DOCUMENT_BYTES", str(32 * 1024 * 1024)))
+    )
+    if not data or len(data) > maximum_bytes:
+        raise ValueError(f"Source document must contain between 1 and {maximum_bytes} bytes")
+    if mime_type not in SUPPORTED_DOCUMENT_TYPES:
+        raise ValueError(f"Unsupported document MIME type: {mime_type or 'unset'}")
+    return data, mime_type
+
+
 def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     printer = _get_printer(str(job["printer_id"]))
     _ensure_printer_enabled(printer)
     document = load_job_document(str(job["id"]))
-    pages = _decode_raster_pages(document)
+    if document.get("kind") == "source_document":
+        source, mime_type = _decode_source_document(document)
+        pages = list(
+            prepare_source_document(
+                source,
+                mime_type=mime_type,
+                target=target_for_printer(printer),
+            )
+        )
+        job["page_count"] = len(pages)
+        save_stored_print_job(job)
+    else:
+        pages = _decode_raster_pages(document)
     ticket = dict(job.get("ticket") or {})
     scaling = ScalingPolicy(str(ticket.get("scaling") or ScalingPolicy.HOLD.value))
     content_optimize = ContentOptimize(str(ticket.get("content_optimize") or ContentOptimize.AUTO.value))
@@ -752,7 +795,7 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
     job["error"] = None
     save_stored_print_job(job)
     try:
-        if job.get("source_kind") == "raster":
+        if job.get("source_kind") in {"raster", "document"}:
             return _process_raster_job(job)
         entry = load_template_entry(str(job["template_id"]))
         template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
@@ -826,6 +869,37 @@ def create_raster_print_job(payload: RasterPrintJobCreateRequest) -> PrintJobRes
     return PrintJobResponse(**_process_stored_print_job(stored))
 
 
+@app.post("/v1/print-jobs/documents", response_model=PrintJobResponse, status_code=202)
+def create_document_print_job(payload: DocumentPrintJobCreateRequest) -> PrintJobResponse:
+    document = {
+        "schema_version": 1,
+        "kind": "source_document",
+        "mime_type": payload.mime_type.split(";", 1)[0].strip().lower(),
+        "data_base64": payload.data_base64,
+    }
+    try:
+        _decode_source_document(document)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ticket = {
+        "copies": payload.copies,
+        "scaling": payload.scaling.value,
+        "content_optimize": payload.content_optimize.value,
+        "dither": payload.dither.value,
+        "mismatch_tolerance_mm": payload.mismatch_tolerance_mm,
+    }
+    stored = create_stored_raster_job(
+        printer_id=payload.printer_id,
+        document=document,
+        ticket=ticket,
+        idempotency_key=payload.idempotency_key,
+        origin=payload.origin,
+    )
+    if int(stored.get("attempts") or 0) > 0:
+        return PrintJobResponse(**stored)
+    return PrintJobResponse(**_process_stored_print_job(stored))
+
+
 @app.get("/v1/print-jobs", response_model=list[PrintJobResponse])
 def get_print_jobs(limit: int = 50) -> list[PrintJobResponse]:
     return [PrintJobResponse(**job) for job in list_stored_print_jobs(limit)]
@@ -851,8 +925,8 @@ def release_print_job(job_id: str, payload: RasterPrintJobReleaseRequest) -> Pri
         raise HTTPException(status_code=404, detail="Print job not found") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if job.get("source_kind") != "raster" or job.get("status") != "held":
-        raise HTTPException(status_code=409, detail="Only held raster jobs can be released")
+    if job.get("source_kind") not in {"raster", "document"} or job.get("status") != "held":
+        raise HTTPException(status_code=409, detail="Only held document jobs can be released")
     job["ticket"] = {**dict(job.get("ticket") or {}), "scaling": payload.scaling.value}
     job["status"] = "queued"
     job["warning"] = None

@@ -14,7 +14,8 @@ RUN poetry check --lock && poetry sync --only main --no-root
 
 FROM base AS runtime
 RUN python -m pip uninstall -y setuptools wheel pip
-RUN apt-get update && apt-get install -y --no-install-recommends libdmtx0b \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ghostscript libcups2 libdmtx0b poppler-utils \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /data/templates /data/drafts /data/print-jobs /app/configs \
