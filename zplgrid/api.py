@@ -17,11 +17,13 @@ import yaml
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
+from .fleet import FleetConflict, HttpPrinterFleetAdapter, PrinterFleetPort, PrintArtifact
+from .fleet.legacy import LegacyFleetAdapter
 from .labelary import render_labelary_png_bytes
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
-from .printer_io import apply_printer_settings, dispatch_zpl, query_raw_command
+from .printer_io import apply_printer_settings, query_raw_command
 from .printer_media import resolve_dynamic_printer_media
 from .printer_registry import PrinterRegistry, RegistryConflict, normalize_agent_url
 from .printer_discovery import discover_printers, inspect_agent
@@ -116,8 +118,14 @@ def _load_printers_config_on_startup() -> None:
         registry = PrinterRegistry()
         registry.initialize()
         app.state.printer_registry = registry
+        fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
+        app.state.fleet_port = (
+            HttpPrinterFleetAdapter(fleet_api_url)
+            if fleet_api_url
+            else LegacyFleetAdapter(registry)
+        )
         interval = max(0, float(os.getenv('ZPLGRID_DISCOVERY_INTERVAL_SECONDS', '30')))
-        if interval:
+        if interval and not fleet_api_url:
             stopped = threading.Event()
             app.state.discovery_stopped = stopped
             def refresh_discovery() -> None:
@@ -150,8 +158,27 @@ def _registry() -> PrinterRegistry:
     return registry
 
 
+def _fleet() -> PrinterFleetPort:
+    fleet = getattr(app.state, "fleet_port", None)
+    if fleet is None:
+        fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
+        fleet = (
+            HttpPrinterFleetAdapter(fleet_api_url)
+            if fleet_api_url
+            else LegacyFleetAdapter(_registry())
+        )
+        app.state.fleet_port = fleet
+    return fleet
+
+
 @app.exception_handler(RegistryConflict)
 async def registry_conflict_handler(_request, exc: RegistryConflict):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={'detail': str(exc)})
+
+
+@app.exception_handler(FleetConflict)
+async def fleet_conflict_handler(_request, exc: FleetConflict):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={'detail': str(exc)})
 
@@ -294,6 +321,7 @@ def render_png(payload: RenderRequest) -> Response:
 class PrintZplRequest(BaseModel):
     zpl: str
     return_preview: bool = False
+    idempotency_key: Optional[str] = Field(default=None, max_length=240)
 
 
 class PrintTemplateRequest(BaseModel):
@@ -302,6 +330,7 @@ class PrintTemplateRequest(BaseModel):
     debug: bool = False
     target: Optional[RenderTarget] = None
     return_preview: bool = False
+    idempotency_key: Optional[str] = Field(default=None, max_length=240)
 
 
 class PrintResponse(BaseModel):
@@ -421,8 +450,17 @@ class TemplateDetailResponse(BaseModel):
 
 
 def _get_printer(printer_id: str) -> dict[str, Any]:
+    """Read a live printer capability snapshot through the fleet boundary."""
     try:
-        return _registry().get(printer_id)
+        return _fleet().get_printer(printer_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}') from None
+
+
+def _get_stored_printer(printer_id: str) -> dict[str, Any]:
+    """Temporary compatibility path for PrintHub-owned registry administration."""
+    try:
+        return _fleet().get_printer(printer_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}') from None
 
@@ -643,7 +681,15 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
         preview = _render_preview_or_error(payload.zpl, dpmm=dpmm, width_in=width_in,
                                            height_in=height_in, return_preview=True)
     try:
-        dispatched = dispatch_zpl(printer, zpl_with_settings, description='Raw ZPL print')
+        dispatched = _fleet().deliver(
+            PrintArtifact(
+                mime_type="application/zpl",
+                payload=zpl_with_settings.encode("utf-8"),
+                description="Raw ZPL print",
+                idempotency_key=payload.idempotency_key,
+            ),
+            printer,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (OSError, RuntimeError) as exc:
@@ -651,10 +697,10 @@ def print_zpl(printer_id: str, payload: PrintZplRequest) -> PrintResponse:
 
     return PrintResponse(
         printer_id=printer_id,
-        bytes_sent=dispatched.bytes_sent,
+        bytes_sent=dispatched.bytes_accepted,
         preview_png_base64=preview,
-        job_id=dispatched.job_id,
-        job_state=dispatched.job_state,
+        job_id=dispatched.delivery_id,
+        job_state=dispatched.downstream_state,
     )
 
 
@@ -736,10 +782,14 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         target = payload.target or _printer_target(printer)
         zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=payload.debug)
         zpl_with_settings = apply_printer_settings(zpl, printer, generated=True)
-        dispatched = dispatch_zpl(
+        dispatched = _fleet().deliver(
+            PrintArtifact(
+                mime_type="application/zpl",
+                payload=zpl_with_settings.encode("utf-8"),
+                description=f"Template: {payload.template.get('name', 'Untitled')}",
+                idempotency_key=payload.idempotency_key,
+            ),
             printer,
-            zpl_with_settings,
-            description=f"Template: {payload.template.get('name', 'Untitled')}",
         )
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -760,10 +810,10 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
     )
     return PrintResponse(
         printer_id=printer_id,
-        bytes_sent=dispatched.bytes_sent,
+        bytes_sent=dispatched.bytes_accepted,
         preview_png_base64=preview,
-        job_id=dispatched.job_id,
-        job_state=dispatched.job_state,
+        job_id=dispatched.delivery_id,
+        job_state=dispatched.downstream_state,
     )
 
 
@@ -828,10 +878,15 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
         job["preview_png_base64"] = base64.b64encode(preview_pages[0].preview_png).decode("ascii")
         return save_stored_print_job(job)
 
+    delivery_attempt = int(job.get("delivery_attempts") or 0) + 1
+    job["delivery_attempts"] = delivery_attempt
+    save_stored_print_job(job)
     dispatched = dispatch_raster_document(
         printer,
         prepared,
         copies=int(ticket.get("copies", 1)),
+        delivery_port=_fleet(),
+        idempotency_key_prefix=f"{job['id']}/attempt-{delivery_attempt}",
     )
     job["status"] = "queued" if dispatched.downstream_job_ids else "sent"
     job["bytes_sent"] = dispatched.bytes_sent
@@ -854,6 +909,9 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
         entry = load_template_entry(str(job["template_id"]))
         template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
         target_payload = job.get("target")
+        delivery_attempt = int(job.get("delivery_attempts") or 0) + 1
+        job["delivery_attempts"] = delivery_attempt
+        save_stored_print_job(job)
         response = print_template(
             str(job["printer_id"]),
             PrintTemplateRequest(
@@ -861,6 +919,7 @@ def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
                 variables=dict(job.get("variables") or {}),
                 target=RenderTarget(**target_payload) if isinstance(target_payload, dict) else None,
                 return_preview=False,
+                idempotency_key=f"{job['id']}/attempt-{delivery_attempt}",
             ),
         )
         job["status"] = "queued" if response.job_id else "sent"
@@ -1247,7 +1306,7 @@ def get_template_preview(template_id: str) -> Response:
 
 @app.get("/v1/printers", response_model=PrintersConfigResponse)
 def get_printers() -> PrintersConfigResponse:
-    printers = [resolve_dynamic_printer_media(printer) for printer in _registry().list()]
+    printers = _fleet().list_printers()
     requested = os.getenv('ZPLGRID_DEFAULT_PRINTER_ID')
     enabled = [p['id'] for p in printers if p.get('enabled', True)]
     default = requested if requested in enabled else next(iter(enabled), None)
@@ -1335,7 +1394,7 @@ def import_printers(payload: dict[str, Any]) -> PrintersConfigResponse:
 
 @app.get("/v1/printers/{printer_id}")
 def get_printer(printer_id: str) -> dict[str, Any]:
-    return resolve_dynamic_printer_media(_get_printer(printer_id))
+    return _get_printer(printer_id)
 
 
 class PrinterSettingsRequest(BaseModel):
@@ -1346,14 +1405,14 @@ class PrinterSettingsRequest(BaseModel):
 @app.get('/v1/printers/{printer_id}/configuration')
 def get_printer_configuration(printer_id: str) -> dict[str, Any]:
     """Stored settings for editing, without hydration from live media sources."""
-    return _get_printer(printer_id)
+    return _get_stored_printer(printer_id)
 
 
 @app.patch('/v1/printers/{printer_id}')
 def patch_printer(printer_id: str, payload: PrinterSettingsRequest) -> dict[str, Any]:
     try:
-        return _registry().patch(printer_id, payload.settings, payload.revision)
-    except RegistryConflict:
+        return _fleet().patch_printer(printer_id, payload.settings, payload.revision)
+    except (RegistryConflict, FleetConflict):
         raise
     except KeyError:
         raise HTTPException(status_code=404, detail='Printer not found') from None
@@ -1373,8 +1432,8 @@ def upsert_printer(printer_id: str, payload: dict[str, Any]) -> PrintersConfigRe
     printer['id'] = printer_id
 
     try:
-        _registry().create(printer)
-    except RegistryConflict:
+        _fleet().put_printer(printer_id, printer)
+    except (RegistryConflict, FleetConflict):
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

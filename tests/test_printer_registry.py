@@ -7,6 +7,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from zplgrid import api, printer_discovery, zebra_tamer
+from zplgrid.fleet.legacy import LegacyFleetAdapter
 from zplgrid.printer_registry import PrinterRegistry, RegistryConflict
 
 
@@ -214,6 +215,7 @@ def test_identity_is_verified_before_any_print_post(monkeypatch):
 @pytest.fixture
 def client(registry, monkeypatch):
     monkeypatch.setattr(api.app.state, 'printer_registry', registry, raising=False)
+    monkeypatch.setattr(api.app.state, 'fleet_port', LegacyFleetAdapter(registry), raising=False)
     def offline(_):
         raise RuntimeError('test agent is offline')
     monkeypatch.setattr('zplgrid.printer_media.get_configuration', offline)
@@ -238,10 +240,23 @@ def test_registration_reads_agent_media_instead_of_client_defaults(client, monke
     assert response.json()['zpl'] == {}
 
 
-def test_raw_print_without_preview_does_not_require_media_after_dispatch(client, monkeypatch):
-    from zplgrid.printer_io import PrintDispatchResult
+def test_raw_print_without_preview_does_not_require_media_after_dispatch(client, registry, monkeypatch):
+    from zplgrid.fleet.ports import DeliveryReceipt, DeliveryState
+
+    class FakeFleet:
+        def get_printer(self, printer_id):
+            return registry.get(printer_id)
+
+        def deliver(self, *_args, **_kwargs):
+            return DeliveryReceipt(
+                bytes_accepted=8,
+                delivery_id='test-job',
+                state=DeliveryState.QUEUED,
+                downstream_state='queued',
+            )
+
     client.patch('/v1/printers/existing-id', json={'revision':1, 'settings':{'enabled':True}})
-    monkeypatch.setattr(api, 'dispatch_zpl', lambda *args, **kwargs: PrintDispatchResult(bytes_sent=8, job_id='test-job', job_state='queued'))
+    monkeypatch.setattr(api, '_fleet', lambda: FakeFleet())
     response = client.post('/v1/printers/existing-id/prints/zpl', json={'zpl':'^XA^XZ', 'return_preview':False})
     assert response.status_code == 200, response.text
     assert response.json()['job_id'] == 'test-job'

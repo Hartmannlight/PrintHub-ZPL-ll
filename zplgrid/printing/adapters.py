@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-from ..printer_io import PrintDispatchResult, apply_printer_settings, dispatch_zpl
+from ..fleet.legacy import LegacyFleetAdapter
+from ..fleet.ports import ArtifactDeliveryPort, DeliveryReceipt, PrintArtifact
+from ..printer_io import apply_printer_settings
 from .raster import PreparedRasterPage, encode_zpl_graphic
-
-
-@dataclass(frozen=True)
-class PrintArtifact:
-    mime_type: str
-    payload: bytes
-    description: str
 
 
 class RasterDriver(Protocol):
     def prepare(self, page: PreparedRasterPage, printer: Mapping[str, Any]) -> PrintArtifact: ...
 
 
-class PrinterBackend(Protocol):
-    def dispatch(self, artifact: PrintArtifact, printer: Mapping[str, Any]) -> PrintDispatchResult: ...
+class PrinterBackend(ArtifactDeliveryPort, Protocol):
+    """Deprecated name retained while callers migrate to ArtifactDeliveryPort."""
 
 
 class ZplRasterDriver:
@@ -33,15 +27,11 @@ class ZplRasterDriver:
         )
 
 
-class ZplBackend:
-    def dispatch(self, artifact: PrintArtifact, printer: Mapping[str, Any]) -> PrintDispatchResult:
-        if artifact.mime_type != "application/zpl":
-            raise ValueError(f"ZPL backend cannot dispatch {artifact.mime_type}")
-        return dispatch_zpl(
-            printer,
-            artifact.payload.decode("utf-8"),
-            description=artifact.description,
-        )
+class ZplBackend(LegacyFleetAdapter):
+    """Compatibility adapter for the legacy in-process fleet implementation."""
+
+    def dispatch(self, artifact: PrintArtifact, printer: Mapping[str, Any]) -> DeliveryReceipt:
+        return self.deliver(artifact, printer)
 
 
 def raster_driver_for(printer: Mapping[str, Any]) -> RasterDriver:

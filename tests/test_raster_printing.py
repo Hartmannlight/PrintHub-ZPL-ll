@@ -107,10 +107,14 @@ def _printer() -> dict:
 def test_raster_job_holds_mismatch_and_releases_with_explicit_fit(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
+    fleet = object()
+    monkeypatch.setattr(api, "_fleet", lambda: fleet)
     dispatches: list[int] = []
 
-    def dispatch(_printer_config, prepared, *, copies):
+    def dispatch(_printer_config, prepared, *, copies, delivery_port, idempotency_key_prefix):
         dispatches.append(copies)
+        assert delivery_port is fleet
+        assert idempotency_key_prefix.endswith('/attempt-1')
         return DocumentDispatchResult(
             bytes_sent=123,
             previews=tuple(page.preview_png for page in prepared),
