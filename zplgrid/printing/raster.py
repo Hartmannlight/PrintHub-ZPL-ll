@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
 import io
+import json
 import math
 import os
 
@@ -111,6 +113,31 @@ def encode_zpl_graphic(page: PreparedRasterPage) -> str:
         "^FS\n"
         "^XZ\n"
     )
+
+
+def encode_prepared_raster(page: PreparedRasterPage, *, copies: int) -> bytes:
+    """Serialize a device-independent, one-bit page for a Fleet driver."""
+    if not 1 <= copies <= 999:
+        raise ValueError("copies must be between 1 and 999")
+    image = page.monochrome
+    width, height = image.size
+    bytes_per_row = (width + 7) // 8
+    packed = bytearray(bytes_per_row * height)
+    pixels = image.load()
+    for y in range(height):
+        row_offset = y * bytes_per_row
+        for x in range(width):
+            if pixels[x, y] == 0:
+                packed[row_offset + (x // 8)] |= 0x80 >> (x % 8)
+    document = {
+        "version": 1,
+        "width_px": width,
+        "height_px": height,
+        "dpi": page.target.dpi,
+        "copies": copies,
+        "black_bits_base64": base64.b64encode(packed).decode("ascii"),
+    }
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("ascii")
 
 
 def _flatten_transparency(image: Image.Image) -> Image.Image:

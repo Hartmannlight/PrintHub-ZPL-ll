@@ -271,14 +271,17 @@ Raster jobs default to `scaling: "hold"`. If a page does not match the loaded
 label, PrintHub stores the source and an exact one-bit print preview but sends
 nothing to the device. `fit` preserves all content with margins; `fill` crops
 centrally without distorting the aspect ratio. Each page is one label. Color
-documents are converted through the common grayscale/dithering pipeline before
-the selected device driver encodes them.
+documents are converted through the common grayscale/dithering pipeline.
+PrintHub submits the resulting versioned one-bit raster artifact to
+PrinterFleet; it does not select a physical transport or create a device
+payload. PrinterFleet's current Zebra driver produces ZPL `^GF`. A future
+Niimbot driver can consume the same prepared artifact without changing IPP
+ingestion, scaling, previews or persistent job handling.
 
-The raster service is intentionally independent of ZPL. `RasterDriver` encodes
-the prepared one-bit page and `PrinterBackend` transports the resulting device
-artifact. The current adapters produce ZPL `^GF` and dispatch it over raw 9100
-or ZebraTamer. Future bitmap devices can add their own driver/agent adapter
-without changing IPP ingestion, scaling, previews or persistent job handling.
+`PRINTHUB_FLEET_API_URL` is required for printer catalog and delivery
+operations. PrintHub deliberately has no local physical-printer registry or
+transport fallback. A missing or unavailable Fleet is reported as HTTP 503;
+template editing, rendering and already persisted logical jobs remain intact.
 
 Jobs are stored under `ZPLGRID_PRINT_JOBS_DIR` (default
 `/data/print-jobs`). An optional `idempotency_key` prevents duplicate printing
@@ -296,7 +299,8 @@ when a caller retries the same business event.
 - 400: template validation or render error
 - 403: Labelary endpoints disabled
 - 404: missing template, draft, or printer
-- 502: printer I/O or Labelary service failure
+- 502: downstream Fleet or Labelary request failed
+- 503: PrinterFleet is not configured or currently unavailable
 
 ## Example template (minimal)
 

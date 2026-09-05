@@ -4,8 +4,6 @@ import base64
 from dataclasses import asdict
 import json
 import os
-import logging
-import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +17,6 @@ from pydantic import BaseModel, Field, model_validator
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
 from .fleet import FleetConflict, HttpPrinterFleetAdapter, PrinterFleetPort, PrintArtifact
-from .fleet.legacy import LegacyFleetAdapter
 from .labelary import render_labelary_png_bytes
 from .integration_events import (
     IntegrationEventStore,
@@ -30,10 +27,6 @@ from .integration_events import (
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
-from .printer_io import apply_printer_settings
-from .printer_media import resolve_dynamic_printer_media
-from .printer_registry import PrinterRegistry, RegistryConflict
-from .printer_discovery import discover_printers
 from .print_drafts_store import load_print_draft, save_print_draft
 from .print_jobs_store import (
     create_job as create_stored_print_job,
@@ -169,19 +162,13 @@ def _record_integration_state(job: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.on_event("startup")
-def _load_printers_config_on_startup() -> None:
+def initialize_application() -> None:
     recover_interrupted_jobs()
     seed_bundled_templates(os.getenv('ZPLGRID_BUNDLED_TEMPLATES_DIR'))
+    fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
+    if fleet_api_url:
+        app.state.fleet_port = HttpPrinterFleetAdapter(fleet_api_url)
     try:
-        registry = PrinterRegistry()
-        registry.initialize()
-        app.state.printer_registry = registry
-        fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
-        app.state.fleet_port = (
-            HttpPrinterFleetAdapter(fleet_api_url)
-            if fleet_api_url
-            else LegacyFleetAdapter(registry)
-        )
         event_url = os.getenv("PRINTHUB_THINGDEX_EVENT_URL", "").strip()
         event_secret = os.getenv("PRINTHUB_THINGDEX_EVENT_SECRET", "").strip()
         if bool(event_url) != bool(event_secret):
@@ -199,60 +186,26 @@ def _load_printers_config_on_startup() -> None:
             )
             app.state.integration_event_worker = event_worker
             event_worker.start()
-        interval = max(0, float(os.getenv('ZPLGRID_DISCOVERY_INTERVAL_SECONDS', '30')))
-        if interval and not fleet_api_url:
-            stopped = threading.Event()
-            app.state.discovery_stopped = stopped
-            def refresh_discovery() -> None:
-                while not stopped.wait(interval):
-                    try:
-                        discover_printers(registry)
-                    except Exception:
-                        logging.getLogger(__name__).exception('Printer discovery failed; registered inventory is retained')
-            worker = threading.Thread(target=refresh_discovery, name='printer-discovery', daemon=True)
-            app.state.discovery_worker = worker
-            worker.start()
     except ValueError as exc:
-        raise RuntimeError(f'Failed to initialize printer registry (YAML was not modified): {exc}') from exc
+        raise RuntimeError(f'Failed to initialize PrintHub: {exc}') from exc
 
 
 @app.on_event('shutdown')
-def stop_printer_discovery() -> None:
-    stopped = getattr(app.state, 'discovery_stopped', None)
-    if stopped:
-        stopped.set()
-        app.state.discovery_worker.join(timeout=1)
+def stop_integration_workers() -> None:
     event_worker = getattr(app.state, "integration_event_worker", None)
     if event_worker:
         event_worker.stop()
-
-
-def _registry() -> PrinterRegistry:
-    registry = getattr(app.state, 'printer_registry', None)
-    if registry is None:
-        registry = PrinterRegistry()
-        registry.initialize()
-        app.state.printer_registry = registry
-    return registry
 
 
 def _fleet() -> PrinterFleetPort:
     fleet = getattr(app.state, "fleet_port", None)
     if fleet is None:
         fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
-        fleet = (
-            HttpPrinterFleetAdapter(fleet_api_url)
-            if fleet_api_url
-            else LegacyFleetAdapter(_registry())
-        )
+        if not fleet_api_url:
+            raise RuntimeError("PRINTHUB_FLEET_API_URL is required for printer operations")
+        fleet = HttpPrinterFleetAdapter(fleet_api_url)
         app.state.fleet_port = fleet
     return fleet
-
-
-@app.exception_handler(RegistryConflict)
-async def registry_conflict_handler(_request, exc: RegistryConflict):
-    from fastapi.responses import JSONResponse
-    return JSONResponse(status_code=409, content={'detail': str(exc)})
 
 
 @app.exception_handler(FleetConflict)
@@ -543,6 +496,8 @@ def _get_printer(printer_id: str) -> dict[str, Any]:
         return _fleet().get_printer(printer_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}') from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _ensure_printer_enabled(printer: Mapping[str, Any]) -> None:
@@ -551,11 +506,8 @@ def _ensure_printer_enabled(printer: Mapping[str, Any]) -> None:
 
 
 def _printer_target(printer: Mapping[str, Any]) -> RenderTarget:
-    resolved = resolve_dynamic_printer_media(printer)
-    media_loaded = (resolved.get('media') or {}).get('loaded') or {}
-    alignment = resolved.get('alignment') or {}
-    if (printer.get('connection') or {}).get('protocol') == 'zebra_tamer' and (not media_loaded or not alignment.get('dpi')):
-        raise HTTPException(status_code=409, detail='Configure the loaded media and printer resolution in ZebraTamer first; agent values are unavailable or incomplete')
+    media_loaded = (printer.get('media') or {}).get('loaded') or {}
+    alignment = printer.get('alignment') or {}
     try:
         width_mm = float(media_loaded['width_mm'])
         height_mm = float(media_loaded['height_mm'])
@@ -673,11 +625,10 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         _assert_variables_present(template, variables)
         target = payload.target or _printer_target(printer)
         zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=payload.debug)
-        zpl_with_settings = apply_printer_settings(zpl, printer, generated=True)
         dispatched = _fleet().deliver(
             PrintArtifact(
                 mime_type="application/zpl",
-                payload=zpl_with_settings.encode("utf-8"),
+                payload=zpl.encode("utf-8"),
                 description=f"Template: {payload.template.get('name', 'Untitled')}",
                 idempotency_key=payload.idempotency_key,
             ),
@@ -1197,7 +1148,10 @@ def get_template_preview(template_id: str) -> Response:
 
 @app.get("/v1/printers", response_model=PrintersConfigResponse)
 def get_printers() -> PrintersConfigResponse:
-    printers = _fleet().list_printers()
+    try:
+        printers = _fleet().list_printers()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     requested = os.getenv('ZPLGRID_DEFAULT_PRINTER_ID')
     enabled = [p['id'] for p in printers if p.get('enabled', True)]
     default = requested if requested in enabled else next(iter(enabled), None)

@@ -20,8 +20,6 @@ def main():
         raise RuntimeError('Runtime image must run as a non-root user')
     args = ['docker', 'run', '-d', '--cap-drop=ALL', '--security-opt=no-new-privileges:true',
             '-p', f'127.0.0.1::{PORT}']
-    if SERVICE == 'hub':
-        args += ['-e', 'ZPLGRID_DISCOVERY_INTERVAL_SECONDS=0']
     container = run(*args, image)
     Path('artifacts').mkdir(exist_ok=True)
     try:

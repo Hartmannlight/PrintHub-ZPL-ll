@@ -7,7 +7,6 @@ from PIL import Image
 import pytest
 
 from zplgrid import api
-from zplgrid.printing.adapters import ZplRasterDriver, backend_for, raster_driver_for
 from zplgrid.printing.domain import (
     ContentOptimize,
     DitherMode,
@@ -16,7 +15,7 @@ from zplgrid.printing.domain import (
     RasterTarget,
     ScalingPolicy,
 )
-from zplgrid.printing.raster import encode_zpl_graphic, prepare_raster_page
+from zplgrid.printing.raster import encode_prepared_raster, encode_zpl_graphic, prepare_raster_page
 from zplgrid.printing.documents import _pdf_sizes, prepare_source_document
 from zplgrid.printing.service import DocumentDispatchResult
 
@@ -104,12 +103,24 @@ def test_pdf_page_dimensions_are_owned_by_document_preparation() -> None:
     assert sizes[1] == pytest.approx((210.0, 297.0), abs=0.01)
 
 
-def test_adapter_selection_is_explicit_and_future_driver_safe() -> None:
-    printer = {"driver": "zpl", "connection": {"protocol": "raw9100"}}
-    assert isinstance(raster_driver_for(printer), ZplRasterDriver)
-    assert backend_for(printer).__class__.__name__ == "ZplBackend"
-    with pytest.raises(ValueError, match="niimbot_b1"):
-        raster_driver_for({"driver": "niimbot_b1"})
+def test_prepared_raster_contract_is_device_independent() -> None:
+    prepared = prepare_raster_page(
+        RasterPageSource(_png(size=(8, 1)), "image/png", 25.4, 3.175),
+        target=RasterTarget(25.4, 3.175, 8),
+        scaling=ScalingPolicy.FIT,
+        dither=DitherMode.NONE,
+    )
+
+    payload = __import__("json").loads(encode_prepared_raster(prepared, copies=2))
+
+    assert payload == {
+        "version": 1,
+        "width_px": 8,
+        "height_px": 1,
+        "dpi": 8,
+        "copies": 2,
+        "black_bits_base64": "/w==",
+    }
 
 
 def _printer() -> dict:
@@ -117,7 +128,6 @@ def _printer() -> dict:
         "id": "demo",
         "driver": "zpl",
         "enabled": True,
-        "connection": {"protocol": "raw9100", "host": "printer", "port": 9100},
         "media": {"loaded": {"width_mm": 50, "height_mm": 50, "color": "white"}},
         "alignment": {"dpi": 203},
         "defaults": {"copies": 1, "rotation": 0},

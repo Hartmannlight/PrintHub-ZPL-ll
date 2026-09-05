@@ -28,8 +28,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     ZPLGRID_BUNDLED_TEMPLATES_DIR=/app/templates \
     ZPLGRID_PRINT_DRAFTS_DIR=/data/drafts \
     ZPLGRID_PRINT_JOBS_DIR=/data/print-jobs \
-    ZPLGRID_COUNTERS_PATH=/data/counters.json \
-    ZPLGRID_PRINTER_REGISTRY_PATH=/data/printers.sqlite3
+    ZPLGRID_COUNTERS_PATH=/data/counters.json
 USER 10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
