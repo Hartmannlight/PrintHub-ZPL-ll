@@ -394,6 +394,44 @@
         }
       }
     },
+    "/v1/print-jobs/documents": {
+      "post": {
+        "summary": "Create Document Print Job",
+        "operationId": "create_document_print_job_v1_print_jobs_documents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentPrintJobCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintJobResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/print-jobs/{job_id}": {
       "get": {
         "summary": "Get Print Job",
@@ -1159,6 +1197,85 @@
         ],
         "title": "DitherMode"
       },
+      "DocumentPrintJobCreateRequest": {
+        "properties": {
+          "printer_id": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Printer Id"
+          },
+          "mime_type": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Mime Type"
+          },
+          "data_base64": {
+            "type": "string",
+            "maxLength": 48000000,
+            "minLength": 1,
+            "title": "Data Base64"
+          },
+          "copies": {
+            "type": "integer",
+            "maximum": 999.0,
+            "minimum": 1.0,
+            "title": "Copies",
+            "default": 1
+          },
+          "scaling": {
+            "$ref": "#/components/schemas/ScalingPolicy",
+            "default": "hold"
+          },
+          "content_optimize": {
+            "$ref": "#/components/schemas/ContentOptimize",
+            "default": "auto"
+          },
+          "dither": {
+            "$ref": "#/components/schemas/DitherMode",
+            "default": "auto"
+          },
+          "mismatch_tolerance_mm": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Mismatch Tolerance Mm",
+            "default": 0.5
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "printer_id",
+          "mime_type",
+          "data_base64"
+        ],
+        "title": "DocumentPrintJobCreateRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1532,6 +1649,18 @@
             "type": "boolean",
             "title": "Return Preview",
             "default": false
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           }
         },
         "type": "object",
@@ -1550,6 +1679,18 @@
             "type": "boolean",
             "title": "Return Preview",
             "default": false
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 240
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           }
         },
         "type": "object",
