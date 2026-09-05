@@ -6,8 +6,6 @@ from .ports import (
     DeliveryState,
     PrintArtifact,
     PrinterCatalogPort,
-    PrinterAdministrationPort,
-    PrinterStatusPort,
     PrinterFleetPort,
     FleetConflict,
 )
@@ -19,8 +17,6 @@ __all__ = [
     "DeliveryState",
     "PrintArtifact",
     "PrinterCatalogPort",
-    "PrinterAdministrationPort",
-    "PrinterStatusPort",
     "PrinterFleetPort",
     "FleetConflict",
     "HttpPrinterFleetAdapter",

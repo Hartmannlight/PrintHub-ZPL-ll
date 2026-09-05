@@ -68,28 +68,9 @@ class PrinterCatalogPort(Protocol):
     def get_printer(self, printer_id: str) -> dict[str, Any]: ...
 
 
-class PrinterAdministrationPort(Protocol):
-    """Temporary PrintHub compatibility facade for fleet-owned configuration."""
-
-    def put_printer(self, printer_id: str, printer: Mapping[str, Any]) -> dict[str, Any]: ...
-
-    def patch_printer(
-        self,
-        printer_id: str,
-        settings: Mapping[str, Any],
-        revision: int,
-    ) -> dict[str, Any]: ...
-
-
-class PrinterStatusPort(Protocol):
-    def get_status(self, printer_id: str) -> dict[str, Any]: ...
-
-
 class PrinterFleetPort(
     ArtifactDeliveryPort,
     PrinterCatalogPort,
-    PrinterAdministrationPort,
-    PrinterStatusPort,
     Protocol,
 ):
-    """Complete boundary used by PrintHub for printer reads and delivery."""
+    """Narrow boundary used by PrintHub for capability reads and delivery."""

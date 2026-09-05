@@ -84,6 +84,22 @@ def test_http_fleet_sends_configured_service_credential(monkeypatch):
     assert captured["headers"]["Authorization"] == "Bearer fleet-secret"
 
 
+def test_http_fleet_adapter_cannot_administer_physical_devices():
+    adapter = HttpPrinterFleetAdapter("http://fleet", api_token="fleet-secret")
+
+    for operation in (
+        "put_printer",
+        "patch_printer",
+        "get_status",
+        "list_agents",
+        "discover_agents",
+        "export_printers",
+        "import_printers",
+        "register_discovered_printer",
+    ):
+        assert not hasattr(adapter, operation)
+
+
 def test_http_fleet_reads_token_from_mounted_secret(tmp_path, monkeypatch):
     token_file = tmp_path / "fleet-token"
     token_file.write_text("mounted-fleet-token-123\n", encoding="utf-8")

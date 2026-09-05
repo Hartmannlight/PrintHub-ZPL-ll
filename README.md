@@ -16,79 +16,24 @@ partial configuration fails startup. Jobs submitted with `origin=thingdex` and
 an `origin_reference` UUID enqueue signed, monotonically sequenced status
 events. Delivery retries happen outside the print request and survive restarts.
 
-## PrintAgent compatibility
+## PrinterFleet boundary
 
-Direct Ethernet/WLAN and serial-over-TCP printers belong in PrinterFleet and do
-not need ZebraTamer or another edge host. ZebraTamer remains the compatible
-PrintAgent implementation for USB, Bluetooth, local serial and isolated site
-networks. Register these devices through PrinterFleet; the following connection
-shape applies only to the bounded legacy in-process adapter:
+Direct Ethernet/WLAN Zebra printers, serial-over-TCP bridges and PrintAgent
+devices are registered and administered in PrinterFleet. Fleet Console is the
+operator UI for discovery, status, queues, maintenance and auditing. PrintHub
+receives only capability snapshots and submits immutable artifacts through its
+narrow Fleet service credential.
 
-```yaml
-connection:
-  protocol: zebra_tamer
-  base_url: http://zpl-agent.local:8080
-  printer_id: schildkrote
-  timeout_ms: 10000
-```
+`GET /v1/printers` and `GET /v1/printers/{id}` remain read-only PrintHub
+conveniences for selecting a logical destination and its current media target.
+PrintHub intentionally exposes no printer mutation, discovery, status-command,
+registry import/export or raw-ZPL endpoint. Hardware integrations must use the
+PrinterFleet API instead.
 
-PrintHub submits `application/zpl` to
-`POST /v1/printers/{printer_id}/jobs` and returns the ZebraTamer job id/state to
-the client. Printer status comes from the ZebraTamer snapshot API.
-
-`GET /v1/zebra-tamer/agents` performs best-effort mDNS discovery. Explicit
-fallback URLs can be supplied as a comma-separated list in
-`ZPLGRID_ZEBRA_TAMER_AGENTS`.
-
-Legacy in-process `raw9100` connections remain supported for migration and
-emulators. New direct-network configuration belongs to PrinterFleet.
-
-### Persistent printer registry
-
-`ZPLGRID_PRINTER_REGISTRY_PATH` selects the SQLite inventory (default
-`configs/printers.sqlite3`; use `/data/printers.sqlite3` in containers). No separate
-database server is required. `ZPLGRID_PRINTER_SEED_PATH` defaults to
-`configs/printers.yml`. The seed is imported **once**, transactionally, preserving
-public IDs and all settings. An immutable seed snapshot is kept inside SQLite.
-The seed file is never written and should be mounted read-only. Subsequent seed
-edits are ignored, including after restart. Back up the database and seed before
-migration. Conflicting duplicate devices abort migration without changing YAML.
-
-Discovery observes agents, not printer configuration. New printers must be
-explicitly registered with `POST /v1/printers/register` after configuring media
-and DPI in ZebraTamer. PrintHub reads those values from the agent; it does not
-accept replacement defaults from the registration form. Repeat registration
-preserves all settings. New public IDs are stable
-`zt-<UUID>` values derived from agent identity and local printer ID; imported IDs
-are never renamed. Agent URLs and device identity must not be used as UI keys.
-
-Modern agents expose a persistent `agent_id`. Known devices can follow verified
-address changes; a different agent at an old address is rejected. Legacy agents
-without an ID remain address-bound and cannot safely follow arbitrary IP changes.
-Upgrade them to enable stable identity. Aliases are deduplicated by agent ID.
-Before sending a job to a stable-ID agent, its identity is verified again.
-
-Background discovery runs every 30 seconds (`ZPLGRID_DISCOVERY_INTERVAL_SECONDS`,
-`0` disables the background task). Manual refresh is `GET /v1/zebra-tamer/agents`;
-`POST /v1/zebra-tamer/discover` with `{"base_url":"http://pi:8080"}` also checks a
-manual address. Registered addresses and environment URLs remain fallback sources
-when multicast fails. Unreachable printers stay in inventory with offline status.
-
-`GET /v1/printers/{id}/configuration` returns stored settings for editing, while
-the ordinary GET resolves authoritative ZebraTamer media or live emulator media.
-Agent media, alignment and device values are not editable in PrintHub. Edit with
-`PATCH /v1/printers/{id}` and `{"revision":1,"settings":{"name":"Workshop"}}`.
-The revision comes from `registry.revision`. A stale revision or identity conflict
-returns 409; PATCH cannot change ID or connection. Legacy PUT is create-or-identical
-and rejects destructive replacement. Use settings PATCH instead.
-
-`GET /v1/printer-registry/export` downloads YAML. POST that parsed configuration
-as JSON to `/v1/printer-registry/import` for additive, all-or-nothing import.
-Different existing entries and duplicate endpoints are rejected. Export contains
-saved configuration only, not runtime metadata. Before rolling back to a pre-registry
-version, export YAML; old versions cannot read SQLite. `ZPLGRID_PRINTER_OVERRIDES_PATH`
-is obsolete and unused. `ZPLGRID_DEFAULT_PRINTER_ID` is returned in the printer list
-when it names an enabled printer, otherwise the first enabled printer is selected.
+The local SQLite printer registry and background discovery remain available only
+inside the compact legacy adapter as a rollback/migration baseline. They are not
+part of the public PrintHub HTTP contract. New deployments configure
+`PRINTHUB_FLEET_API_URL` and use PrinterFleet as the sole hardware authority.
 
 ## Typed template inputs
 
@@ -337,32 +282,14 @@ without changing IPP ingestion, scaling, previews or persistent job handling.
 
 Jobs are stored under `ZPLGRID_PRINT_JOBS_DIR` (default
 `/data/print-jobs`). An optional `idempotency_key` prevents duplicate printing
-when a caller retries the same business event. The synchronous endpoints below
-remain available for drafts and compatibility clients.
+when a caller retries the same business event.
 
-- `POST /v1/printers/{printer_id}/prints/zpl`
-  - Body: `{ "zpl": "^XA...", "return_preview": false }`
 - `POST /v1/print-jobs`
   - Body: `{ "printer_id": "...", "template_id": "...", "variables": {...} }`
     or an immutable inline `"template": {...}` snapshot instead of `template_id`.
   - If `target` is omitted, the printer's loaded media size and alignment are used.
 - `GET /v1/printers` -> full config
 - `GET /v1/printers/{printer_id}`
-- `PUT /v1/printers/{printer_id}` -> create or return identical config; conflicts return 409
-- `PATCH /v1/printers/{printer_id}` -> revision-checked settings update
-- `GET /v1/printers/{printer_id}/status` -> raw + parsed + normalized status JSON
-
-Status response highlights:
-
-- `raw`: raw text responses from `~HS`, `~HD`, `~HI`, `~HQES`
-- `parsed`: legacy parsing (lists and key/value maps)
-- `normalized.summary`: model/firmware/dpmm/memory plus `errors` and `warnings`
-
-`return_preview` requires `ZPLGRID_ENABLE_LABELARY_PREVIEW=1` and returns
-`preview_png_base64` in the response.
-
-Printers are stored in the SQLite registry. YAML import/export follows
-`zplgrid/schemas/printers_v1.schema.json`.
 
 ### Common error cases
 
@@ -428,26 +355,19 @@ Printers are stored in the SQLite registry. YAML import/export follows
 - Provide variable extraction from `{placeholders}` and a data entry form.
 - Use `/v1/renders/png` or `/v1/templates/.../preview` for previews (if enabled).
 - For operator UI, submit saved templates or draft snapshots through `/v1/print-jobs`.
-## ZebraTamer device and media ownership
 
-For `zebra_tamer` connections, configure the printer and loaded roll in
-ZebraTamer's optional `/ui/` WebUI. PrintHub reads authoritative size, color and
-resolution from `GET /v1/printers/{id}/configuration`; it does not maintain a
-second editable media/device profile. If the agent has no media, no known DPI,
-or is unavailable, automatic layout selection stops with a clear error instead
-of using stale registry values. Explicit raw ZPL can still be sent independently.
+## Device and media ownership
 
-Existing registry IDs, connections and original migrated configurations remain
-intact. Old device/media fields are archival only for agent connections. Register
-new agents after setting up their media and DPI in ZebraTamer. Registry edits for
-agent media/alignment/ZPL are rejected; display name, enabled state and job
-defaults remain editable here. The Studio links to ZebraTamer for administration.
+Configure printers, loaded rolls, transport endpoints and PrintAgent devices in
+PrinterFleet. PrintHub consumes that authoritative snapshot. If Fleet has no
+media, no known DPI or is unavailable, automatic layout selection stops with a
+clear error instead of guessing from stale configuration. Studio links to the
+separately deployed Fleet Console for administration.
 
-PrintHub no longer injects darkness, speed, or output mode into agent jobs. For
-compiler-generated jobs it also omits the generated `^PW`/`^LL` header and does not
-bake the legacy registry calibration into layout coordinates. Caller-supplied raw
-ZPL is not stripped: intentional device commands in it still take effect. Raw
-TCP printers and the emulator retain their existing behavior.
+PrintHub does not inject darkness, speed or output mode into agent jobs. For
+compiler-generated jobs it also omits the generated `^PW`/`^LL` header and does
+not bake legacy registry calibration into layout coordinates. Device-specific
+transport and maintenance policy remains behind PrinterFleet's driver boundary.
 
 
 ## Automated maintenance and releases

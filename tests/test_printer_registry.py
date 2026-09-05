@@ -1,6 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-import json
 
 import pytest
 import yaml
@@ -229,72 +228,29 @@ def test_agent_device_and_media_edits_are_rejected_at_registry_boundary(registry
     assert registry.get('existing-id')['registry']['revision'] == 1
 
 
-def test_registration_reads_agent_media_instead_of_client_defaults(client, monkeypatch):
-    monkeypatch.setattr(api, 'inspect_agent', lambda _: {'base_url':'http://agent-b:8080', 'agent_id':'pi-b', 'printers':[{'id':'new'}]})
-    monkeypatch.setattr('zplgrid.printer_media.get_configuration', lambda _: {'media': {'state': {'media': {'width_mm':60, 'height_mm':30, 'color':{'name':'Blue'}, 'print_technology':'thermal_transfer'}}},
-        'device': {'profile': {'resolution_dpi':300}}})
-    response = client.post('/v1/printers/register', json={'base_url':'http://agent-b:8080', 'printer_id':'new', 'width_mm':1, 'height_mm':1, 'dpi':203})
-    assert response.status_code == 200, response.text
-    assert response.json()['media']['loaded']['color'] == 'Blue'
-    assert response.json()['alignment']['dpi'] == 300
-    assert response.json()['zpl'] == {}
+def test_public_api_exposes_only_read_only_printer_snapshots(client, monkeypatch):
+    paths = client.get('/openapi.json').json()['paths']
+    retired = {
+        '/v1/printers/{printer_id}/prints/zpl',
+        '/v1/printers/{printer_id}/status',
+        '/v1/printers/{printer_id}/configuration',
+        '/v1/printers/register',
+        '/v1/printer-registry/export',
+        '/v1/printer-registry/import',
+        '/v1/zebra-tamer/agents',
+        '/v1/zebra-tamer/discover',
+    }
+    assert retired.isdisjoint(paths)
+    assert set(paths['/v1/printers']) == {'get'}
+    assert set(paths['/v1/printers/{printer_id}']) == {'get'}
 
-
-def test_raw_print_without_preview_does_not_require_media_after_dispatch(client, registry, monkeypatch):
-    from zplgrid.fleet.ports import DeliveryReceipt, DeliveryState
-
-    class FakeFleet:
-        def get_printer(self, printer_id):
-            return registry.get(printer_id)
-
-        def deliver(self, *_args, **_kwargs):
-            return DeliveryReceipt(
-                bytes_accepted=8,
-                delivery_id='test-job',
-                state=DeliveryState.QUEUED,
-                downstream_state='queued',
-            )
-
-    client.patch('/v1/printers/existing-id', json={'revision':1, 'settings':{'enabled':True}})
-    monkeypatch.setattr(api, '_fleet', lambda: FakeFleet())
-    response = client.post('/v1/printers/existing-id/prints/zpl', json={'zpl':'^XA^XZ', 'return_preview':False})
-    assert response.status_code == 200, response.text
-    assert response.json()['job_id'] == 'test-job'
-
-
-def test_api_conflicts_and_revision_checked_settings(client):
-    replacement = printer(agent_id='pi-b', url='http://agent-b:8080')
-    assert client.put('/v1/printers/existing-id', json=replacement).status_code == 409
-    response = client.patch('/v1/printers/existing-id', json={'revision': 1, 'settings': {'name': 'Studio edit'}})
-    assert response.status_code == 200
-    assert response.json()['name'] == 'Studio edit'
-    assert client.patch('/v1/printers/existing-id', json={'revision': 1, 'settings': {'enabled': True}}).status_code == 409
-
-
-def test_api_registration_does_not_reset_existing_profile(client, monkeypatch):
-    monkeypatch.setattr(api, 'inspect_agent', lambda _: {'base_url': 'http://agent-a:8080', 'agent_id': 'pi-a', 'printers': [{'id': 'zebra-usb'}]})
-    response = client.post('/v1/printers/register', json={'base_url': 'http://agent-a:8080', 'printer_id': 'zebra-usb', 'width_mm': 50, 'height_mm': 25, 'dpi': 203})
-    assert response.status_code == 200
-    assert response.json()['id'] == 'existing-id'
-    assert response.json()['alignment']['dpi'] == 300
-    assert response.json()['enabled'] is False
-
-
-def test_api_export_import_and_default(client, monkeypatch):
-    exported = client.get('/v1/printer-registry/export')
-    assert exported.status_code == 200
-    assert client.post('/v1/printer-registry/import', json=yaml.safe_load(exported.text)).status_code == 200
     assert client.get('/v1/printers').json()['default_printer_id'] is None
-    client.patch('/v1/printers/existing-id', json={'revision': 1, 'settings': {'enabled': True}})
     monkeypatch.setenv('ZPLGRID_DEFAULT_PRINTER_ID', 'existing-id')
+    registry = client.app.state.printer_registry
+    existing = registry.get('existing-id')
+    registry.patch('existing-id', {'enabled': True}, existing['registry']['revision'])
     assert client.get('/v1/printers').json()['default_printer_id'] == 'existing-id'
-
-
-def test_registration_rejects_identity_change_after_discovery(client, monkeypatch):
-    monkeypatch.setattr(api, 'inspect_agent', lambda _: {'base_url': 'http://agent-a:8080', 'agent_id': 'pi-b', 'printers': [{'id': 'zebra-usb'}]})
-    result = client.post('/v1/printers/register', json={'base_url': 'http://agent-a:8080', 'printer_id': 'zebra-usb', 'agent_id': 'pi-a', 'width_mm': 50, 'height_mm': 25, 'dpi': 203})
-    assert result.status_code == 409
-    assert client.get('/v1/printers/existing-id').json()['connection']['agent_id'] == 'pi-a'
+    assert client.get('/v1/printers/existing-id').json()['id'] == 'existing-id'
 
 
 def test_duplicate_legacy_aliases_are_flagged_without_merging(tmp_path, monkeypatch):
