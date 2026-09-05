@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 from zplgrid.fleet import DeliveryState, HttpPrinterFleetAdapter, PrintArtifact
 
 
@@ -79,3 +81,24 @@ def test_http_fleet_sends_configured_service_credential(monkeypatch):
     HttpPrinterFleetAdapter("http://fleet", api_token="fleet-secret").list_printers()
 
     assert captured["headers"]["Authorization"] == "Bearer fleet-secret"
+
+
+def test_http_fleet_reads_token_from_mounted_secret(tmp_path, monkeypatch):
+    token_file = tmp_path / "fleet-token"
+    token_file.write_text("mounted-fleet-token-123\n", encoding="utf-8")
+    monkeypatch.delenv("PRINTHUB_FLEET_API_TOKEN", raising=False)
+    monkeypatch.setenv("PRINTHUB_FLEET_API_TOKEN_FILE", str(token_file))
+
+    adapter = HttpPrinterFleetAdapter("http://fleet")
+
+    assert adapter.api_token == "mounted-fleet-token-123"
+
+
+def test_http_fleet_rejects_ambiguous_token_sources(tmp_path, monkeypatch):
+    token_file = tmp_path / "fleet-token"
+    token_file.write_text("mounted-fleet-token-123", encoding="utf-8")
+    monkeypatch.setenv("PRINTHUB_FLEET_API_TOKEN", "inline-fleet-token-123")
+    monkeypatch.setenv("PRINTHUB_FLEET_API_TOKEN_FILE", str(token_file))
+
+    with pytest.raises(ValueError, match="only one"):
+        HttpPrinterFleetAdapter("http://fleet")

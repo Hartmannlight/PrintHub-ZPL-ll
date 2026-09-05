@@ -3,10 +3,12 @@
 PrintHub is an independent template, render and print service. It does not
 require Thingdex. Its primary web client is PrintHub Studio.
 
-When an external PrinterFleet is configured, set
-`PRINTHUB_FLEET_API_TOKEN` to its service credential. The HTTP adapter attaches
-that bearer credential and an `X-Correlation-ID` to every catalog and delivery
-request.
+When an external PrinterFleet is configured, set either
+`PRINTHUB_FLEET_API_TOKEN` or, preferably in production,
+`PRINTHUB_FLEET_API_TOKEN_FILE` to a mounted service credential. Configuring
+both fails startup. The HTTP adapter attaches that bearer credential and an
+`X-Correlation-ID` to every catalog and delivery request. Its Fleet principal
+needs only `observer` and `submitter` for the sites it serves.
 
 Thingdex integration uses a durable PrintHub event outbox. Configure
 `PRINTHUB_THINGDEX_EVENT_URL` and `PRINTHUB_THINGDEX_EVENT_SECRET` together;
@@ -14,9 +16,13 @@ partial configuration fails startup. Jobs submitted with `origin=thingdex` and
 an `origin_reference` UUID enqueue signed, monotonically sequenced status
 events. Delivery retries happen outside the print request and survive restarts.
 
-## ZebraTamer printers
+## PrintAgent compatibility
 
-ZebraTamer is the preferred hardware boundary. Register a printer with:
+Direct Ethernet/WLAN and serial-over-TCP printers belong in PrinterFleet and do
+not need ZebraTamer or another edge host. ZebraTamer remains the compatible
+PrintAgent implementation for USB, Bluetooth, local serial and isolated site
+networks. Register these devices through PrinterFleet; the following connection
+shape applies only to the bounded legacy in-process adapter:
 
 ```yaml
 connection:
@@ -34,7 +40,8 @@ the client. Printer status comes from the ZebraTamer snapshot API.
 fallback URLs can be supplied as a comma-separated list in
 `ZPLGRID_ZEBRA_TAMER_AGENTS`.
 
-Legacy `raw9100` connections remain supported for migration and emulators.
+Legacy in-process `raw9100` connections remain supported for migration and
+emulators. New direct-network configuration belongs to PrinterFleet.
 
 ### Persistent printer registry
 

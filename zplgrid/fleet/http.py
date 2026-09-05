@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from pathlib import Path
 import re
 from typing import Any, Mapping
 import uuid
@@ -24,11 +25,20 @@ class HttpPrinterFleetAdapter:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.api_token = (
-            os.getenv("PRINTHUB_FLEET_API_TOKEN", "").strip()
-            if api_token is None
-            else api_token.strip()
-        )
+        self.api_token = self._resolve_token(api_token)
+
+    @staticmethod
+    def _resolve_token(explicit: str | None) -> str:
+        if explicit is not None:
+            return explicit.strip()
+        inline = os.getenv("PRINTHUB_FLEET_API_TOKEN", "").strip()
+        path = os.getenv("PRINTHUB_FLEET_API_TOKEN_FILE", "").strip()
+        if inline and path:
+            raise ValueError("Configure only one PrintHub Fleet token source")
+        token = Path(path).read_text(encoding="utf-8").strip() if path else inline
+        if token and (len(token) < 16 or any(character.isspace() for character in token)):
+            raise ValueError("PrintHub Fleet token must be at least 16 characters without whitespace")
+        return token
 
     def _request(self, method: str, path: str, **kwargs):
         headers = dict(kwargs.pop("headers", {}))
