@@ -223,7 +223,7 @@ Built-in macros (only added if missing from `variables`):
 - `_time_hh_mm`, `_time_hh_mm_ss`, `_timestamp_ms`
 - `_uuid`, `_short_id`
 - `_draft_id`, `_printer_id`, `_template_name`
-- Counters (increment only on print via `/prints/template`):
+- Counters (increment only when a template job is processed via `/v1/print-jobs`):
   - `_counter_global`, `_counter_daily`
   - `_counter_printer`, `_counter_printer_daily`
   - `_counter_template`, `_counter_template_daily`
@@ -342,8 +342,9 @@ remain available for drafts and compatibility clients.
 
 - `POST /v1/printers/{printer_id}/prints/zpl`
   - Body: `{ "zpl": "^XA...", "return_preview": false }`
-- `POST /v1/printers/{printer_id}/prints/template`
-  - Body: `{ "template": {...}, "variables": {...}, "debug": false, "target": {...}, "return_preview": false }`
+- `POST /v1/print-jobs`
+  - Body: `{ "printer_id": "...", "template_id": "...", "variables": {...} }`
+    or an immutable inline `"template": {...}` snapshot instead of `template_id`.
   - If `target` is omitted, the printer's loaded media size and alignment are used.
 - `GET /v1/printers` -> full config
 - `GET /v1/printers/{printer_id}`
@@ -426,7 +427,7 @@ Printers are stored in the SQLite registry. YAML import/export follows
 - Enforce schema constraints and invariants before sending to API.
 - Provide variable extraction from `{placeholders}` and a data entry form.
 - Use `/v1/renders/png` or `/v1/templates/.../preview` for previews (if enabled).
-- For operator UI, use drafts or templates plus `/prints/template`.
+- For operator UI, submit saved templates or draft snapshots through `/v1/print-jobs`.
 ## ZebraTamer device and media ownership
 
 For `zebra_tamer` connections, configure the printer and loaded roll in

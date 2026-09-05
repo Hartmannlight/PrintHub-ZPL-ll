@@ -10,6 +10,11 @@ from zplgrid import api
 from zplgrid import print_jobs_store
 
 
+def test_direct_template_print_route_is_not_public() -> None:
+    paths = {route.path for route in api.app.routes}
+    assert "/v1/printers/{printer_id}/prints/template" not in paths
+
+
 def test_print_job_is_persisted_and_idempotent(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
     template_path = tmp_path / "template.json"

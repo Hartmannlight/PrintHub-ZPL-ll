@@ -227,55 +227,6 @@
         }
       }
     },
-    "/v1/printers/{printer_id}/prints/template": {
-      "post": {
-        "summary": "Print Template",
-        "operationId": "print_template_v1_printers__printer_id__prints_template_post",
-        "parameters": [
-          {
-            "name": "printer_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Printer Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PrintTemplateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrintResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/v1/print-jobs": {
       "post": {
         "summary": "Create Print Job",
@@ -1659,57 +1610,6 @@
           "bytes_sent"
         ],
         "title": "PrintResponse"
-      },
-      "PrintTemplateRequest": {
-        "properties": {
-          "template": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Template"
-          },
-          "variables": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Variables"
-          },
-          "debug": {
-            "type": "boolean",
-            "title": "Debug",
-            "default": false
-          },
-          "target": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/RenderTarget"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "return_preview": {
-            "type": "boolean",
-            "title": "Return Preview",
-            "default": false
-          },
-          "idempotency_key": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 240
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
-          }
-        },
-        "type": "object",
-        "required": [
-          "template"
-        ],
-        "title": "PrintTemplateRequest"
       },
       "PrintZplRequest": {
         "properties": {

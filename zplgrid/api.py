@@ -710,7 +710,6 @@ def get_print_draft(draft_id: str) -> PrintDraftDetailResponse:
     )
 
 
-@app.post("/v1/printers/{printer_id}/prints/template", response_model=PrintResponse)
 def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintResponse:
     printer = _get_printer(printer_id)
     _ensure_printer_enabled(printer)
