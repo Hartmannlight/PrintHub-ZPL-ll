@@ -34,6 +34,7 @@ def test_http_fleet_sends_versioned_artifact_contract(monkeypatch):
 
     assert captured["url"] == "http://fleet:8000/v1/deliveries"
     assert captured["json"]["idempotency_key"] == "job-1/attempt-1"
+    assert captured["headers"]["X-Correlation-ID"]
     assert base64.b64decode(captured["json"]["artifact"]["payload_base64"]) == b"^XA^XZ"
     assert receipt.state is DeliveryState.TRANSPORT_ACCEPTED
     assert receipt.delivery_id == "delivery-1"
@@ -65,3 +66,16 @@ def test_missing_printer_is_exposed_as_catalog_miss(monkeypatch):
         assert exc.args == ("missing",)
     else:
         raise AssertionError("Expected missing fleet printer to raise KeyError")
+
+
+def test_http_fleet_sends_configured_service_credential(monkeypatch):
+    captured = {}
+
+    def request(_method, _url, **kwargs):
+        captured.update(kwargs)
+        return Response([])
+
+    monkeypatch.setattr("zplgrid.fleet.http.requests.request", request)
+    HttpPrinterFleetAdapter("http://fleet", api_token="fleet-secret").list_printers()
+
+    assert captured["headers"]["Authorization"] == "Bearer fleet-secret"

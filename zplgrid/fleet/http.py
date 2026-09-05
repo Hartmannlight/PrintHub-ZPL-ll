@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import re
 from typing import Any, Mapping
 import uuid
@@ -14,16 +15,32 @@ from .ports import DeliveryReceipt, DeliveryState, FleetConflict, PrintArtifact
 class HttpPrinterFleetAdapter:
     """Versioned HTTP adapter for the independently deployed PrinterFleet."""
 
-    def __init__(self, base_url: str, *, timeout_seconds: float = 10) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_seconds: float = 10,
+        api_token: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.api_token = (
+            os.getenv("PRINTHUB_FLEET_API_TOKEN", "").strip()
+            if api_token is None
+            else api_token.strip()
+        )
 
     def _request(self, method: str, path: str, **kwargs):
+        headers = dict(kwargs.pop("headers", {}))
+        headers.setdefault("X-Correlation-ID", str(uuid.uuid4()))
+        if self.api_token:
+            headers.setdefault("Authorization", f"Bearer {self.api_token}")
         try:
             response = requests.request(
                 method,
                 f"{self.base_url}{path}",
                 timeout=self.timeout_seconds,
+                headers=headers,
                 **kwargs,
             )
             if response.status_code == 404:

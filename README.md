@@ -3,6 +3,11 @@
 PrintHub is an independent template, render and print service. It does not
 require Thingdex. Its primary web client is PrintHub Studio.
 
+When an external PrinterFleet is configured, set
+`PRINTHUB_FLEET_API_TOKEN` to its service credential. The HTTP adapter attaches
+that bearer credential and an `X-Correlation-ID` to every catalog and delivery
+request.
+
 ## ZebraTamer printers
 
 ZebraTamer is the preferred hardware boundary. Register a printer with:
