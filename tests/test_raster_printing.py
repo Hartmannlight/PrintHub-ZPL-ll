@@ -84,6 +84,20 @@ def test_source_pixel_limit_is_checked_before_decoding(monkeypatch) -> None:
         )
 
 
+def test_swapped_label_dimensions_are_rotated_instead_of_held() -> None:
+    prepared = prepare_raster_page(
+        RasterPageSource(_png(size=(10, 20)), "image/png", 25.0246, 50.0493),
+        target=RasterTarget(50, 25, 203),
+        scaling=ScalingPolicy.HOLD,
+    )
+
+    assert prepared.monochrome.size == (400, 200)
+    assert prepared.monochrome.getpixel((0, 0)) == 0
+    assert prepared.monochrome.getpixel((399, 199)) == 0
+    assert prepared.source_width_mm == pytest.approx(25.0246)
+    assert prepared.source_height_mm == pytest.approx(50.0493)
+
+
 def test_source_image_is_interpreted_as_target_sized_document() -> None:
     pages = prepare_source_document(
         _png(), mime_type="image/png", target=RasterTarget(50, 30, 203)

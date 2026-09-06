@@ -47,16 +47,23 @@ def prepare_raster_page(
     if mismatch_tolerance_mm < 0 or not math.isfinite(mismatch_tolerance_mm):
         raise ValueError("mismatch_tolerance_mm must be a finite non-negative number")
 
-    mismatch = (
-        abs(source.width_mm - target.width_mm) > mismatch_tolerance_mm
-        or abs(source.height_mm - target.height_mm) > mismatch_tolerance_mm
+    direct_match = (
+        abs(source.width_mm - target.width_mm) <= mismatch_tolerance_mm
+        and abs(source.height_mm - target.height_mm) <= mismatch_tolerance_mm
     )
+    rotated_match = (
+        abs(source.width_mm - target.height_mm) <= mismatch_tolerance_mm
+        and abs(source.height_mm - target.width_mm) <= mismatch_tolerance_mm
+    )
+    mismatch = not direct_match and not rotated_match
     if mismatch and scaling is ScalingPolicy.HOLD:
         raise MediaMismatchError(
             source_width_mm=source.width_mm,
             source_height_mm=source.height_mm,
             target=target,
         )
+
+    rotate_to_match = not direct_match and rotated_match
 
     try:
         with Image.open(io.BytesIO(source.data)) as opened:
@@ -67,6 +74,9 @@ def prepare_raster_page(
             image = _flatten_transparency(opened)
     except (OSError, Image.DecompressionBombError) as exc:
         raise ValueError("Invalid or unsupported image data") from exc
+
+    if rotate_to_match:
+        image = image.transpose(Image.Transpose.ROTATE_270)
 
     fitted = _fit_to_target(
         image,
