@@ -832,6 +832,11 @@
               }
             ],
             "title": "Origin Reference"
+          },
+          "override_label_limit": {
+            "type": "boolean",
+            "title": "Override Label Limit",
+            "default": false
           }
         },
         "type": "object",
@@ -1173,6 +1178,39 @@
             ],
             "title": "Warning"
           },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Reason"
+          },
+          "requested_labels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Labels"
+          },
+          "max_labels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Labels"
+          },
           "error": {
             "anyOf": [
               {
@@ -1350,6 +1388,11 @@
               }
             ],
             "title": "Origin Reference"
+          },
+          "override_label_limit": {
+            "type": "boolean",
+            "title": "Override Label Limit",
+            "default": false
           }
         },
         "type": "object",
@@ -1363,6 +1406,11 @@
         "properties": {
           "scaling": {
             "$ref": "#/components/schemas/ScalingPolicy"
+          },
+          "override_label_limit": {
+            "type": "boolean",
+            "title": "Override Label Limit",
+            "default": false
           }
         },
         "type": "object",

@@ -275,6 +275,72 @@ def test_multi_page_raster_job_persists_every_downstream_delivery(
     ]
 
 
+def test_label_limit_holds_before_fleet_delivery(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("PRINTHUB_MAX_LABELS_PER_JOB", "1")
+    monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
+    monkeypatch.setattr(
+        api,
+        "_fleet",
+        lambda: (_ for _ in ()).throw(AssertionError("Fleet must not be called")),
+    )
+    encoded = base64.b64encode(_png()).decode("ascii")
+    request = api.RasterPrintJobCreateRequest(
+        printer_id="demo",
+        pages=[
+            api.RasterPageRequest(
+                mime_type="image/png",
+                data_base64=encoded,
+                width_mm=50,
+                height_mm=50,
+            ),
+            api.RasterPageRequest(
+                mime_type="image/png",
+                data_base64=encoded,
+                width_mm=50,
+                height_mm=50,
+            ),
+        ],
+    )
+
+    held = api.create_raster_print_job(request)
+
+    assert held.status == "held"
+    assert held.hold_reason == "label_limit_exceeded"
+    assert held.requested_labels == 2
+    assert held.max_labels == 1
+    assert "explicitly confirm" in held.warning
+
+    fleet = object()
+    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+
+    def dispatch(_printer, prepared, *, copies, delivery_port, idempotency_key_prefix):
+        assert len(prepared) == 2
+        assert copies == 1
+        assert delivery_port is fleet
+        return DocumentDispatchResult(
+            bytes_sent=42,
+            previews=tuple(page.preview_png for page in prepared),
+            downstream_job_ids=("delivery-1", "delivery-2"),
+            downstream_job_states=("queued", "queued"),
+        )
+
+    monkeypatch.setattr(api, "dispatch_raster_document", dispatch)
+    released = api.release_print_job(
+        held.id,
+        api.RasterPrintJobReleaseRequest(
+            scaling=ScalingPolicy.FIT,
+            override_label_limit=True,
+        ),
+    )
+
+    assert released.status == "queued"
+    assert released.hold_reason is None
+    assert released.requested_labels == 2
+
+
 def test_source_document_is_persisted_then_held_by_printhub_policy(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())

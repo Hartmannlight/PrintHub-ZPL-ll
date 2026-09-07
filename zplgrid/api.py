@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import asdict
 import json
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -51,6 +52,7 @@ from .printing.domain import (
     ScalingPolicy,
 )
 from .printing.documents import SUPPORTED_DOCUMENT_TYPES, prepare_source_document
+from .printing.limits import evaluate_label_limit
 from .printing.service import (
     dispatch_document as dispatch_raster_document,
     prepare_document as prepare_raster_document,
@@ -408,6 +410,7 @@ class RasterPrintJobCreateRequest(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
     origin_reference: Optional[str] = Field(default=None, max_length=255)
+    override_label_limit: bool = False
 
 
 class DocumentPrintJobCreateRequest(BaseModel):
@@ -422,10 +425,12 @@ class DocumentPrintJobCreateRequest(BaseModel):
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
     origin_reference: Optional[str] = Field(default=None, max_length=255)
+    override_label_limit: bool = False
 
 
 class RasterPrintJobReleaseRequest(BaseModel):
     scaling: ScalingPolicy
+    override_label_limit: bool = False
 
 
 class DownstreamJobResponse(BaseModel):
@@ -449,6 +454,9 @@ class PrintJobResponse(BaseModel):
     downstream_jobs: list[DownstreamJobResponse] = Field(default_factory=list)
     preview_png_base64: Optional[str] = None
     warning: Optional[str] = None
+    hold_reason: Optional[str] = None
+    requested_labels: Optional[int] = None
+    max_labels: Optional[int] = None
     error: Optional[str] = None
     created_at: str
     updated_at: str
@@ -751,10 +759,30 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     else:
         pages = _decode_raster_pages(document)
     ticket = dict(job.get("ticket") or {})
+    copies = int(ticket.get("copies", 1))
     scaling = ScalingPolicy(str(ticket.get("scaling") or ScalingPolicy.HOLD.value))
     content_optimize = ContentOptimize(str(ticket.get("content_optimize") or ContentOptimize.AUTO.value))
     dither = DitherMode(str(ticket.get("dither") or DitherMode.AUTO.value))
     tolerance = float(ticket.get("mismatch_tolerance_mm", 0.5))
+    limit = evaluate_label_limit(pages=len(pages), copies=copies)
+    if limit.exceeded and not bool(ticket.get("override_label_limit")):
+        preview_pages = prepare_raster_document(
+            printer,
+            pages,
+            scaling=ScalingPolicy.FIT,
+            content_optimize=content_optimize,
+            dither=dither,
+            mismatch_tolerance_mm=tolerance,
+        )
+        job["status"] = "held"
+        job["hold_reason"] = "label_limit_exceeded"
+        job["requested_labels"] = limit.requested_labels
+        job["max_labels"] = limit.max_labels
+        job["warning"] = limit.message
+        job["preview_png_base64"] = base64.b64encode(
+            preview_pages[0].preview_png
+        ).decode("ascii")
+        return save_stored_print_job(job)
     try:
         prepared = prepare_raster_document(
             printer,
@@ -774,6 +802,7 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
             mismatch_tolerance_mm=tolerance,
         )
         job["status"] = "held"
+        job["hold_reason"] = "media_mismatch"
         job["warning"] = str(exc)
         job["preview_png_base64"] = base64.b64encode(preview_pages[0].preview_png).decode("ascii")
         return save_stored_print_job(job)
@@ -784,7 +813,7 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     dispatched = dispatch_raster_document(
         printer,
         prepared,
-        copies=int(ticket.get("copies", 1)),
+        copies=copies,
         delivery_port=_fleet(),
         idempotency_key_prefix=f"{job['id']}/attempt-{delivery_attempt}",
     )
@@ -798,6 +827,9 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     )
     job["preview_png_base64"] = base64.b64encode(dispatched.previews[0]).decode("ascii")
     job["warning"] = None
+    job["hold_reason"] = None
+    job["requested_labels"] = limit.requested_labels
+    job["max_labels"] = limit.max_labels
     return save_stored_print_job(job)
 
 
@@ -989,6 +1021,7 @@ def create_raster_print_job(payload: RasterPrintJobCreateRequest) -> PrintJobRes
         "content_optimize": payload.content_optimize.value,
         "dither": payload.dither.value,
         "mismatch_tolerance_mm": payload.mismatch_tolerance_mm,
+        "override_label_limit": payload.override_label_limit,
     }
     stored = create_stored_raster_job(
         printer_id=payload.printer_id,
@@ -1021,6 +1054,7 @@ def create_document_print_job(payload: DocumentPrintJobCreateRequest) -> PrintJo
         "content_optimize": payload.content_optimize.value,
         "dither": payload.dither.value,
         "mismatch_tolerance_mm": payload.mismatch_tolerance_mm,
+        "override_label_limit": payload.override_label_limit,
     }
     stored = create_stored_raster_job(
         printer_id=payload.printer_id,
@@ -1066,7 +1100,11 @@ def release_print_job(job_id: str, payload: RasterPrintJobReleaseRequest) -> Pri
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if job.get("source_kind") not in {"raster", "document"} or job.get("status") != "held":
         raise HTTPException(status_code=409, detail="Only held document jobs can be released")
-    job["ticket"] = {**dict(job.get("ticket") or {}), "scaling": payload.scaling.value}
+    job["ticket"] = {
+        **dict(job.get("ticket") or {}),
+        "scaling": payload.scaling.value,
+        "override_label_limit": payload.override_label_limit,
+    }
     job["status"] = "queued"
     job["warning"] = None
     save_stored_print_job(job)
