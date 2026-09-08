@@ -1,0 +1,9 @@
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - ipp-gateway/Dockerfile
+    statement: >-
+      The gateway must start DBus and Avahi as root. Its guarded entrypoint
+      permanently drops supplementary groups, GID, and UID before it creates
+      any print queue or accepts a document; the container smoke test verifies
+      that PID 1 is non-root after startup.
