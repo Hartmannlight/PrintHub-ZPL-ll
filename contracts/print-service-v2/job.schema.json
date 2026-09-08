@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://printhub.local/contracts/print-service-v2/job.schema.json",
+  "title": "Print service v2 job",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "printer_id", "state", "created_at", "updated_at", "idempotency_key", "request_sha256", "device_payload_bytes", "bytes_transferred", "delivery_attempts"],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "printer_id": { "type": "string", "minLength": 1 },
+    "state": {
+      "enum": ["receiving", "queued", "held", "transmitting", "transport_accepted", "completed_observed", "failed", "outcome_unknown", "cancelled"]
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "label_count": { "type": ["integer", "null"], "minimum": 0 },
+    "idempotency_key": { "type": ["string", "null"] },
+    "request_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+    "device_payload_bytes": { "type": "integer", "minimum": 0 },
+    "bytes_transferred": { "type": "integer", "minimum": 0 },
+    "delivery_attempts": { "type": "integer", "minimum": 0 },
+    "error": { "type": ["string", "null"] }
+  }
+}

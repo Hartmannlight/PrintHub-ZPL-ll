@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://printhub.local/contracts/print-service-v2/printer.schema.json",
+  "title": "Print service v2 printer",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "service_id", "display_name", "device_family", "enabled", "accepted_mime_types", "capabilities", "profile", "status", "observed_at", "media"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "service_id": { "type": "string", "minLength": 1 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "device_family": { "type": "string", "minLength": 1 },
+    "enabled": { "type": "boolean" },
+    "accepted_mime_types": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+    "capabilities": { "type": "object" },
+    "profile": { "type": "object" },
+    "status": { "type": "object" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "media": {
+      "type": "object",
+      "required": ["state", "revision"],
+      "properties": {
+        "state": { "type": ["object", "null"] },
+        "revision": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

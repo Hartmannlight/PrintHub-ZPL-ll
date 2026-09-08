@@ -152,14 +152,14 @@ def _printer() -> dict:
 def test_raster_job_holds_mismatch_and_releases_with_explicit_fit(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
-    fleet = object()
-    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+    service = object()
+    monkeypatch.setattr(api, "_printer_services", lambda: service)
     dispatches: list[int] = []
 
     def dispatch(_printer_config, prepared, *, copies, delivery_port, idempotency_key_prefix):
         dispatches.append(copies)
-        assert delivery_port is fleet
-        assert idempotency_key_prefix.endswith('/attempt-1')
+        assert delivery_port is service
+        assert idempotency_key_prefix.endswith('/artifact-v1')
         return DocumentDispatchResult(
             bytes_sent=123,
             previews=tuple(page.preview_png for page in prepared),
@@ -225,14 +225,14 @@ def test_multi_page_raster_job_persists_every_downstream_delivery(
 ) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
-    fleet = object()
-    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+    service = object()
+    monkeypatch.setattr(api, "_printer_services", lambda: service)
 
     def dispatch(_printer_config, prepared, *, copies, delivery_port, idempotency_key_prefix):
         assert len(prepared) == 2
         assert copies == 1
-        assert delivery_port is fleet
-        assert idempotency_key_prefix.endswith("/attempt-1")
+        assert delivery_port is service
+        assert idempotency_key_prefix.endswith("/artifact-v1")
         return DocumentDispatchResult(
             bytes_sent=84,
             previews=tuple(page.preview_png for page in prepared),
@@ -275,7 +275,7 @@ def test_multi_page_raster_job_persists_every_downstream_delivery(
     ]
 
 
-def test_label_limit_holds_before_fleet_delivery(
+def test_label_limit_holds_before_service_delivery(
     tmp_path, monkeypatch
 ) -> None:
     monkeypatch.setenv("ZPLGRID_PRINT_JOBS_DIR", str(tmp_path / "jobs"))
@@ -283,8 +283,8 @@ def test_label_limit_holds_before_fleet_delivery(
     monkeypatch.setattr(api, "_get_printer", lambda _printer_id: _printer())
     monkeypatch.setattr(
         api,
-        "_fleet",
-        lambda: (_ for _ in ()).throw(AssertionError("Fleet must not be called")),
+        "_printer_services",
+        lambda: (_ for _ in ()).throw(AssertionError("Print service must not be called")),
     )
     encoded = base64.b64encode(_png()).decode("ascii")
     request = api.RasterPrintJobCreateRequest(
@@ -313,13 +313,13 @@ def test_label_limit_holds_before_fleet_delivery(
     assert held.max_labels == 1
     assert "explicitly confirm" in held.warning
 
-    fleet = object()
-    monkeypatch.setattr(api, "_fleet", lambda: fleet)
+    service = object()
+    monkeypatch.setattr(api, "_printer_services", lambda: service)
 
     def dispatch(_printer, prepared, *, copies, delivery_port, idempotency_key_prefix):
         assert len(prepared) == 2
         assert copies == 1
-        assert delivery_port is fleet
+        assert delivery_port is service
         return DocumentDispatchResult(
             bytes_sent=42,
             previews=tuple(page.preview_png for page in prepared),

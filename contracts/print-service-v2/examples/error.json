@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "idempotency_conflict",
+    "message": "The idempotency key already identifies a different job",
+    "details": {}
+  }
+}

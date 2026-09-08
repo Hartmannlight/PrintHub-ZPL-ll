@@ -1,0 +1,8 @@
+{
+  "protocol": {"name": "printhub-print-service", "major": 2, "minor": 0},
+  "service_id": "workshop-zebra-tamer",
+  "service_type": "zebra_tamer",
+  "display_name": "Workshop ZebraTamer",
+  "version": "0.1.0",
+  "capabilities": ["catalog", "jobs", "idempotency_lookup", "media", "zebra_configuration"]
+}

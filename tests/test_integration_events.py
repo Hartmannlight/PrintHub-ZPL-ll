@@ -9,6 +9,7 @@ import uuid
 import pytest
 
 from zplgrid import api
+from zplgrid.printer_services import DeliveryReceipt, DeliveryState
 from zplgrid.integration_events import (
     IntegrationEventStore,
     IntegrationEventWorker,
@@ -109,14 +110,31 @@ def test_thingdex_job_enqueues_one_deterministic_status_event(tmp_path, monkeypa
     )
     monkeypatch.setattr(
         api,
-        "print_template",
-        lambda printer_id, _payload: api.PrintResponse(
-            printer_id=printer_id,
-            bytes_sent=12,
-            job_id="fleet-delivery",
-            job_state="queued",
-        ),
+        "_get_printer",
+        lambda printer_id: {
+            "id": printer_id,
+            "enabled": True,
+            "accepted_mime_types": ["application/zpl"],
+            "media": {
+                "revision": "media-1",
+                "loaded": {"width_mm": 50, "height_mm": 25, "color": "white"},
+            },
+            "alignment": {"dpi": 203},
+        },
     )
+
+    class Service:
+        def deliver_job(self, _artifacts, _printer, **_kwargs):
+            return DeliveryReceipt(12, DeliveryState.QUEUED, "service-delivery", "queued")
+
+        def get_deliveries(self, _delivery_ids):
+            return {
+                "service-delivery": DeliveryReceipt(
+                    12, DeliveryState.QUEUED, "service-delivery", "queued"
+                )
+            }
+
+    monkeypatch.setattr(api, "_printer_services", lambda: Service())
     intent_id = str(uuid.uuid4())
     request = api.PrintJobCreateRequest(
         printer_id="demo",

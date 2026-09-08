@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://printhub.local/contracts/print-service-v2/service.schema.json",
+  "title": "Print service v2 identity",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol", "service_id", "service_type", "display_name", "version", "capabilities"],
+  "properties": {
+    "protocol": {
+      "type": "object",
+      "required": ["name", "major", "minor"],
+      "properties": {
+        "name": { "const": "printhub-print-service" },
+        "major": { "const": 2 },
+        "minor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "service_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "service_type": { "type": "string", "minLength": 1 },
+    "display_name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "idempotency_key": "logical-job-17/attempt-1",
+  "description": "Protocol example",
+  "media_revision": null,
+  "copies": 1,
+  "artifacts": [
+    {
+      "mime_type": "application/zpl",
+      "sha256": "ed8e714af3487078dad40759796e3ef97afc4585bce78a8c65741604100c436a",
+      "data_base64": "XlhBXlha"
+    }
+  ],
+  "options": {}
+}

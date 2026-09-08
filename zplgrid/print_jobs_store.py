@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -11,6 +12,10 @@ from typing import Any
 
 
 _jobs_lock = threading.Lock()
+
+
+class IdempotencyConflict(ValueError):
+    pass
 
 
 def _now() -> str:
@@ -34,6 +39,11 @@ def _job_path(job_id: str) -> Path:
 def _document_path(job_id: str) -> Path:
     normalized = _job_path(job_id).stem
     return jobs_dir() / "documents" / f"{normalized}.json"
+
+
+def _artifacts_path(job_id: str) -> Path:
+    normalized = _job_path(job_id).stem
+    return jobs_dir() / "artifacts" / f"{normalized}.json"
 
 
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -63,6 +73,27 @@ def find_by_idempotency_key(key: str) -> dict[str, Any] | None:
     return None
 
 
+def _request_fingerprint(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _existing_idempotent_job(key: str | None, fingerprint: str) -> dict[str, Any] | None:
+    if not key:
+        return None
+    existing = find_by_idempotency_key(key)
+    if existing is None:
+        return None
+    previous = existing.get("request_fingerprint")
+    if previous is not None and previous != fingerprint:
+        raise IdempotencyConflict(
+            "The idempotency key was already used for different print content"
+        )
+    return existing
+
+
 def create_job(
     *,
     printer_id: str,
@@ -73,12 +104,25 @@ def create_job(
     idempotency_key: str | None,
     origin: str | None,
     origin_reference: str | None = None,
+    output_mode: str = "auto",
 ) -> dict[str, Any]:
+    request_fingerprint = _request_fingerprint(
+        {
+            "kind": "template",
+            "printer_id": printer_id,
+            "template_id": template_id,
+            "template": template,
+            "variables": variables,
+            "target": target,
+            "output_mode": output_mode,
+            "origin": origin,
+            "origin_reference": origin_reference,
+        }
+    )
     with _jobs_lock:
-        if idempotency_key:
-            existing = find_by_idempotency_key(idempotency_key)
-            if existing is not None:
-                return existing
+        existing = _existing_idempotent_job(idempotency_key, request_fingerprint)
+        if existing is not None:
+            return existing
         now = _now()
         payload: dict[str, Any] = {
             "id": str(uuid.uuid4()),
@@ -89,7 +133,9 @@ def create_job(
             "template": template,
             "variables": variables,
             "target": target,
+            "output_mode": output_mode,
             "idempotency_key": idempotency_key,
+            "request_fingerprint": request_fingerprint,
             "origin": origin,
             "origin_reference": origin_reference,
             "attempts": 0,
@@ -114,11 +160,20 @@ def create_raster_job(
     origin: str | None,
     origin_reference: str | None = None,
 ) -> dict[str, Any]:
+    request_fingerprint = _request_fingerprint(
+        {
+            "kind": "raster_or_document",
+            "printer_id": printer_id,
+            "document": document,
+            "ticket": ticket,
+            "origin": origin,
+            "origin_reference": origin_reference,
+        }
+    )
     with _jobs_lock:
-        if idempotency_key:
-            existing = find_by_idempotency_key(idempotency_key)
-            if existing is not None:
-                return existing
+        existing = _existing_idempotent_job(idempotency_key, request_fingerprint)
+        if existing is not None:
+            return existing
         now = _now()
         job_id = str(uuid.uuid4())
         source_kind = "document" if document.get("kind") == "source_document" else "raster"
@@ -132,6 +187,7 @@ def create_raster_job(
             "page_count": len(pages) if isinstance(pages, list) else None,
             "ticket": ticket,
             "idempotency_key": idempotency_key,
+            "request_fingerprint": request_fingerprint,
             "origin": origin,
             "origin_reference": origin_reference,
             "attempts": 0,
@@ -150,10 +206,70 @@ def create_raster_job(
         return payload
 
 
+def create_artifact_reprint(
+    original: dict[str, Any], *, idempotency_key: str | None
+) -> dict[str, Any]:
+    original_id = str(original["id"])
+    artifacts = load_job_artifacts(original_id)
+    if artifacts is None:
+        raise ValueError("The original job has no immutable artifacts to reprint")
+    fingerprint = _request_fingerprint(
+        {"kind": "artifact_reprint", "original_id": original_id, "artifacts": artifacts}
+    )
+    with _jobs_lock:
+        existing = _existing_idempotent_job(idempotency_key, fingerprint)
+        if existing is not None:
+            return existing
+        now = _now()
+        job_id = str(uuid.uuid4())
+        payload = {
+            "id": job_id,
+            "source_kind": "artifact_reprint",
+            "status": "queued",
+            "printer_id": original["printer_id"],
+            "template_id": original.get("template_id"),
+            "page_count": original.get("page_count"),
+            "reprint_of": original_id,
+            "idempotency_key": idempotency_key,
+            "request_fingerprint": fingerprint,
+            "origin": "explicit_reprint",
+            "origin_reference": original_id,
+            "attempts": 0,
+            "bytes_sent": None,
+            "downstream_job_id": None,
+            "downstream_job_state": None,
+            "downstream_jobs": [],
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        save_job_artifacts(job_id, artifacts)
+        _write_atomic(_job_path(job_id), payload)
+        return payload
+
+
 def load_job_document(job_id: str) -> dict[str, Any]:
     path = _document_path(job_id)
     if not path.exists():
         raise FileNotFoundError(job_id)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_job_artifacts(job_id: str, artifact_set: dict[str, Any]) -> None:
+    """Persist immutable, fully evaluated bytes before any service request."""
+    path = _artifacts_path(job_id)
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing != artifact_set:
+            raise ValueError("Immutable print artifacts already exist with different content")
+        return
+    _write_atomic(path, artifact_set)
+
+
+def load_job_artifacts(job_id: str) -> dict[str, Any] | None:
+    path = _artifacts_path(job_id)
+    if not path.exists():
+        return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -171,7 +287,25 @@ def save_job(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def claim_job(job_id: str) -> dict[str, Any] | None:
+    """Atomically claim one safely undispatched job for the single delivery attempt."""
+    with _jobs_lock:
+        payload = load_job(job_id)
+        if payload.get("status") not in {"queued", "waiting_for_service"}:
+            return None
+        payload["attempts"] = int(payload.get("attempts") or 0) + 1
+        payload["status"] = "processing"
+        payload["error"] = None
+        payload["updated_at"] = _now()
+        _write_atomic(_job_path(job_id), payload)
+        return payload
+
+
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+    return list_all_jobs()[: max(1, min(limit, 1000))]
+
+
+def list_all_jobs() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for path in jobs_dir().glob("*.json"):
         try:
@@ -179,13 +313,13 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
         except (OSError, ValueError):
             continue
     result.sort(key=lambda entry: str(entry.get("created_at") or ""), reverse=True)
-    return result[: max(1, min(limit, 200))]
+    return result
 
 
 def recover_interrupted_jobs() -> int:
     """Mark jobs interrupted mid-dispatch as unknown instead of retrying them automatically."""
     recovered = 0
-    for payload in list_jobs(200):
+    for payload in list_all_jobs():
         if payload.get("status") != "processing":
             continue
         payload["status"] = "outcome_unknown"

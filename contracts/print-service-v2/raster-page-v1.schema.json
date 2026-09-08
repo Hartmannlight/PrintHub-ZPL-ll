@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://printhub.local/contracts/print-service-v2/raster-page-v1.schema.json",
+  "title": "PrintHub monochrome raster page v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "width_px", "height_px", "dpi", "copies", "black_bits_base64"],
+  "properties": {
+    "version": { "const": 1 },
+    "width_px": { "type": "integer", "minimum": 1, "maximum": 20000 },
+    "height_px": { "type": "integer", "minimum": 1, "maximum": 20000 },
+    "dpi": { "type": "integer", "minimum": 100, "maximum": 1200 },
+    "copies": { "const": 1 },
+    "black_bits_base64": { "type": "string", "minLength": 4, "contentEncoding": "base64" }
+  }
+}

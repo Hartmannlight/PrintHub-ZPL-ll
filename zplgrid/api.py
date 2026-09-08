@@ -5,24 +5,29 @@ from dataclasses import asdict
 import json
 import logging
 import os
+import secrets
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
-from .fleet import (
+from .printer_services import (
     DeliveryState,
-    FleetConflict,
-    HttpPrinterFleetAdapter,
-    PrinterFleetPort,
+    HttpPrintServiceAdapter,
+    PrinterServicePort,
+    PrinterServiceRegistry,
     PrintArtifact,
+    ServiceConflict,
+    ServiceUnavailable,
 )
 from .labelary import render_labelary_png_bytes
 from .integration_events import (
@@ -31,17 +36,24 @@ from .integration_events import (
     ThingdexEventPublisher,
     event_id as integration_event_id,
 )
+from .ipp_shares import list_shares, save_share, set_share_enabled
 from .macros import MacroContext, build_macro_variables, collect_template_placeholders, now_for_macros
 from .model import DataMatrixElement, LabelTarget, LeafNode, QrElement, SplitNode, Template, TextElement
 from .parser import load_template
 from .print_drafts_store import load_print_draft, save_print_draft
 from .print_jobs_store import (
+    claim_job as claim_stored_print_job,
     create_job as create_stored_print_job,
     create_raster_job as create_stored_raster_job,
+    create_artifact_reprint,
+    IdempotencyConflict,
+    list_all_jobs as list_all_stored_print_jobs,
     list_jobs as list_stored_print_jobs,
+    load_job_artifacts,
     load_job as load_stored_print_job,
     load_job_document,
     recover_interrupted_jobs,
+    save_job_artifacts,
     save_job as save_stored_print_job,
 )
 from .printing.domain import (
@@ -58,6 +70,7 @@ from .printing.service import (
     prepare_document as prepare_raster_document,
     target_for_printer,
 )
+from .printing.raster import encode_prepared_raster, prepare_raster_page
 from .render import RenderOptions, render_text
 from .templates_store import load_template_entry, list_templates, save_template_entry, seed_bundled_templates, update_template_entry
 
@@ -119,6 +132,94 @@ class PrintersConfigResponse(BaseModel):
     default_printer_id: str | None = None
 
 
+class PrinterServiceCreateRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    base_url: str = Field(min_length=8, max_length=2000)
+    token: SecretStr
+
+
+class PrinterServiceUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    base_url: str | None = Field(default=None, min_length=8, max_length=2000)
+    token: SecretStr | None = None
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if all(
+            value is None
+            for value in (self.display_name, self.base_url, self.token, self.enabled)
+        ):
+            raise ValueError("At least one service property is required")
+        return self
+
+
+class PrinterCatalogUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    visible: bool | None = None
+    default: bool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if self.display_name is None and self.visible is None and self.default is None:
+            raise ValueError("At least one printer property is required")
+        return self
+
+
+class ZebraPrinterSaveRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    transport: str = Field(pattern="^(tcp|char_device|usb_bulk)$")
+    tcp_host: str | None = Field(default=None, max_length=253)
+    tcp_port: int = Field(default=9100, ge=1, le=65535)
+    device: str = Field(default="", max_length=1000)
+    usb_vendor_id: int | None = Field(default=None, ge=0, le=65535)
+    usb_product_id: int | None = Field(default=None, ge=0, le=65535)
+    usb_serial: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_transport(self):
+        if self.transport == "tcp" and not (self.tcp_host or "").strip():
+            raise ValueError("TCP printers require a host name or IP address")
+        if self.transport == "char_device" and not self.device.strip():
+            raise ValueError("Character-device printers require a device path")
+        if self.transport == "usb_bulk" and (
+            self.usb_vendor_id is None or self.usb_product_id is None
+        ):
+            raise ValueError("USB bulk printers require vendor and product IDs")
+        return self
+
+
+class IppShareSaveRequest(BaseModel):
+    printer_id: str = Field(min_length=1, max_length=240)
+    display_name: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+
+
+class IppShareUpdateRequest(BaseModel):
+    enabled: bool
+
+
+def _admin_token() -> str:
+    inline = os.getenv("PRINTHUB_ADMIN_TOKEN", "").strip()
+    path = os.getenv("PRINTHUB_ADMIN_TOKEN_FILE", "").strip()
+    if inline and path:
+        raise HTTPException(status_code=503, detail="Configure one PrintHub admin token source")
+    try:
+        token = Path(path).read_text(encoding="utf-8").strip() if path else inline
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="PrintHub admin token is unavailable") from exc
+    if len(token) < 24 or any(character.isspace() for character in token):
+        raise HTTPException(status_code=503, detail="PrintHub administration is not configured")
+    return token
+
+
+def require_admin(authorization: str | None = Header(default=None)) -> None:
+    supplied = authorization.removeprefix("Bearer ") if authorization else ""
+    if not secrets.compare_digest(supplied, _admin_token()):
+        raise HTTPException(status_code=401, detail="A valid PrintHub admin token is required")
+
+
 def _integration_event_store() -> IntegrationEventStore:
     configured = os.getenv("PRINTHUB_INTEGRATION_EVENTS_DIR", "").strip()
     path = Path(configured) if configured else Path(
@@ -174,9 +275,13 @@ def _record_integration_state(job: dict[str, Any]) -> dict[str, Any]:
 def initialize_application() -> None:
     recover_interrupted_jobs()
     seed_bundled_templates(os.getenv('ZPLGRID_BUNDLED_TEMPLATES_DIR'))
-    fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
-    if fleet_api_url:
-        app.state.fleet_port = HttpPrinterFleetAdapter(fleet_api_url)
+    app.state.printer_service_port = PrinterServiceRegistry.from_environment()
+    if _background_jobs_enabled():
+        print_worker = PrintJobWorker(
+            interval_seconds=float(os.getenv("PRINTHUB_PRINT_WORKER_INTERVAL_SECONDS", "1"))
+        )
+        app.state.print_job_worker = print_worker
+        print_worker.start()
     try:
         event_url = os.getenv("PRINTHUB_THINGDEX_EVENT_URL", "").strip()
         event_secret = os.getenv("PRINTHUB_THINGDEX_EVENT_SECRET", "").strip()
@@ -201,24 +306,37 @@ def initialize_application() -> None:
 
 @app.on_event('shutdown')
 def stop_integration_workers() -> None:
+    print_worker = getattr(app.state, "print_job_worker", None)
+    if print_worker:
+        print_worker.stop()
     event_worker = getattr(app.state, "integration_event_worker", None)
     if event_worker:
         event_worker.stop()
 
 
-def _fleet() -> PrinterFleetPort:
-    fleet = getattr(app.state, "fleet_port", None)
-    if fleet is None:
-        fleet_api_url = os.getenv("PRINTHUB_FLEET_API_URL", "").strip()
-        if not fleet_api_url:
-            raise RuntimeError("PRINTHUB_FLEET_API_URL is required for printer operations")
-        fleet = HttpPrinterFleetAdapter(fleet_api_url)
-        app.state.fleet_port = fleet
-    return fleet
+def _printer_services() -> PrinterServicePort:
+    service = getattr(app.state, "printer_service_port", None)
+    if service is None:
+        service = PrinterServiceRegistry.from_environment()
+        app.state.printer_service_port = service
+    return service
 
 
-@app.exception_handler(FleetConflict)
-async def fleet_conflict_handler(_request, exc: FleetConflict):
+def _service_registry() -> PrinterServiceRegistry:
+    registry = _printer_services()
+    if not isinstance(registry, PrinterServiceRegistry):
+        raise RuntimeError("Persistent print-service management is unavailable")
+    return registry
+
+
+@app.exception_handler(ServiceConflict)
+async def service_conflict_handler(_request, exc: ServiceConflict):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={'detail': str(exc)})
+
+
+@app.exception_handler(IdempotencyConflict)
+async def idempotency_conflict_handler(_request, exc: IdempotencyConflict):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409, content={'detail': str(exc)})
 
@@ -381,6 +499,7 @@ class PrintJobCreateRequest(BaseModel):
     template: Optional[dict[str, Any]] = None
     variables: dict[str, Any] = Field(default_factory=dict)
     target: Optional[RenderTarget] = None
+    output_mode: Literal["auto", "native", "raster"] = "auto"
     idempotency_key: Optional[str] = Field(default=None, max_length=240)
     origin: Optional[str] = Field(default=None, max_length=120)
     origin_reference: Optional[str] = Field(default=None, max_length=255)
@@ -431,6 +550,10 @@ class DocumentPrintJobCreateRequest(BaseModel):
 class RasterPrintJobReleaseRequest(BaseModel):
     scaling: ScalingPolicy
     override_label_limit: bool = False
+
+
+class ReprintRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=240)
 
 
 class DownstreamJobResponse(BaseModel):
@@ -514,9 +637,9 @@ class TemplateDetailResponse(BaseModel):
 
 
 def _get_printer(printer_id: str) -> dict[str, Any]:
-    """Read a live printer capability snapshot through the fleet boundary."""
+    """Read a live printer capability snapshot through its print service."""
     try:
-        return _fleet().get_printer(printer_id)
+        return _printer_services().get_printer(printer_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f'Printer not found: {printer_id}') from None
     except RuntimeError as exc:
@@ -648,7 +771,7 @@ def print_template(printer_id: str, payload: PrintTemplateRequest) -> PrintRespo
         _assert_variables_present(template, variables)
         target = payload.target or _printer_target(printer)
         zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=payload.debug)
-        dispatched = _fleet().deliver(
+        dispatched = _printer_services().deliver(
             PrintArtifact(
                 mime_type="application/zpl",
                 payload=zpl.encode("utf-8"),
@@ -744,6 +867,29 @@ def _downstream_job_records(
 def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     printer = _get_printer(str(job["printer_id"]))
     _ensure_printer_enabled(printer)
+    existing_artifacts = load_job_artifacts(str(job["id"]))
+    if existing_artifacts is not None:
+        job["delivery_attempts"] = int(job.get("delivery_attempts") or 0) + 1
+        save_stored_print_job(job)
+        receipt = _dispatch_template_artifact_set(job, printer, existing_artifacts)
+        job["status"] = "queued" if receipt.delivery_id else "sent"
+        job["bytes_sent"] = receipt.bytes_accepted
+        job["downstream_job_id"] = receipt.delivery_id
+        job["downstream_job_state"] = receipt.downstream_state
+        job["downstream_jobs"] = (
+            [
+                {
+                    "id": receipt.delivery_id,
+                    "state": receipt.downstream_state or receipt.state.value,
+                    "bytes_accepted": receipt.bytes_accepted,
+                    "error": receipt.error,
+                }
+            ]
+            if receipt.delivery_id
+            else []
+        )
+        job["error"] = receipt.error
+        return save_stored_print_job(job)
     document = load_job_document(str(job["id"]))
     if document.get("kind") == "source_document":
         source, mime_type = _decode_source_document(document)
@@ -807,6 +953,25 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
         job["preview_png_base64"] = base64.b64encode(preview_pages[0].preview_png).decode("ascii")
         return save_stored_print_job(job)
 
+    dispatch_key = str(job.get("dispatch_key") or f"{job['id']}/artifact-v1")
+    job["dispatch_key"] = dispatch_key
+    artifact_set = {
+        "version": 1,
+        "copies": copies,
+        "media_revision": (printer.get("media") or {}).get("revision"),
+        "description": "Prepared raster document",
+        "artifacts": [
+            {
+                "mime_type": "application/vnd.printhub.raster-page+json",
+                "data_base64": base64.b64encode(
+                    encode_prepared_raster(page, copies=1)
+                ).decode("ascii"),
+                "description": "Prepared raster document",
+            }
+            for page in prepared
+        ],
+    }
+    save_job_artifacts(str(job["id"]), artifact_set)
     delivery_attempt = int(job.get("delivery_attempts") or 0) + 1
     job["delivery_attempts"] = delivery_attempt
     save_stored_print_job(job)
@@ -814,8 +979,8 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
         printer,
         prepared,
         copies=copies,
-        delivery_port=_fleet(),
-        idempotency_key_prefix=f"{job['id']}/attempt-{delivery_attempt}",
+        delivery_port=_printer_services(),
+        idempotency_key_prefix=dispatch_key,
     )
     job["status"] = "queued" if dispatched.downstream_job_ids else "sent"
     job["bytes_sent"] = dispatched.bytes_sent
@@ -833,63 +998,213 @@ def _process_raster_job(job: dict[str, Any]) -> dict[str, Any]:
     return save_stored_print_job(job)
 
 
+def _prepare_template_artifact_set(
+    job: dict[str, Any], printer: Mapping[str, Any]
+) -> dict[str, Any]:
+    existing = load_job_artifacts(str(job["id"]))
+    if existing is not None:
+        return existing
+    if job.get("source_kind") == "inline_template":
+        template_json = dict(job["template"])
+    else:
+        entry = load_template_entry(str(job["template_id"]))
+        template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
+    template = load_template(template_json)
+    target_payload = job.get("target")
+    target = (
+        RenderTarget(**target_payload)
+        if isinstance(target_payload, dict)
+        else _printer_target(printer)
+    )
+    resolved = job.get("resolved_variables")
+    if not isinstance(resolved, dict):
+        supplied = dict(job.get("variables") or {})
+        macros = build_macro_variables(
+            collect_template_placeholders(template),
+            existing_variables=supplied,
+            context=MacroContext(
+                template_name=str(template_json.get("name") or "Untitled"),
+                printer_id=str(job["printer_id"]),
+                draft_id=None,
+                now=now_for_macros(),
+                increment_counters=True,
+            ),
+        )
+        resolved = {**macros, **supplied}
+        _assert_variables_present(template, resolved)
+        job["resolved_variables"] = resolved
+        job["resolved_template"] = template_json
+        save_stored_print_job(job)
+    zpl = template.compile(
+        target=LabelTarget(**target.model_dump()), variables=resolved, debug=False
+    )
+    accepted = set(printer.get("accepted_mime_types") or ["application/zpl"])
+    description = f"Template: {template_json.get('name', 'Untitled')}"
+    output_mode = str(job.get("output_mode") or "auto")
+    use_native = output_mode == "native" or (
+        output_mode == "auto" and "application/zpl" in accepted
+    )
+    use_raster = output_mode == "raster" or (
+        output_mode == "auto"
+        and "application/zpl" not in accepted
+        and "application/vnd.printhub.raster-page+json" in accepted
+    )
+    if use_native and "application/zpl" not in accepted:
+        raise ValueError("The selected printer does not accept native ZPL")
+    if use_raster and "application/vnd.printhub.raster-page+json" not in accepted:
+        raise ValueError("The selected printer does not accept the PrintHub raster format")
+    if use_native:
+        artifact = {
+            "mime_type": "application/zpl",
+            "data_base64": base64.b64encode(zpl.encode("utf-8")).decode("ascii"),
+            "description": description,
+        }
+    elif use_raster:
+        dpmm, width_in, height_in = _target_to_labelary_args(target)
+        png = render_labelary_png_bytes(
+            zpl,
+            dpmm=dpmm,
+            label_width_in=width_in,
+            label_height_in=height_in,
+            index=0,
+            timeout_s=30,
+        )
+        raster_target = target_for_printer(printer)
+        prepared = prepare_raster_page(
+            RasterPageSource(
+                data=png,
+                mime_type="image/png",
+                width_mm=target.width_mm,
+                height_mm=target.height_mm,
+            ),
+            target=raster_target,
+            scaling=ScalingPolicy.HOLD,
+            content_optimize=ContentOptimize.TEXT,
+            dither=DitherMode.NONE,
+            mismatch_tolerance_mm=0.01,
+        )
+        artifact = {
+            "mime_type": "application/vnd.printhub.raster-page+json",
+            "data_base64": base64.b64encode(
+                encode_prepared_raster(prepared, copies=1)
+            ).decode("ascii"),
+            "description": description,
+        }
+    else:
+        raise ValueError("Printer accepts neither native ZPL nor the PrintHub raster format")
+    artifact_set = {
+        "version": 1,
+        "copies": 1,
+        "media_revision": (printer.get("media") or {}).get("revision"),
+        "description": description,
+        "artifacts": [artifact],
+    }
+    save_job_artifacts(str(job["id"]), artifact_set)
+    return artifact_set
+
+
+def _dispatch_template_artifact_set(
+    job: dict[str, Any], printer: Mapping[str, Any], artifact_set: Mapping[str, Any]
+):
+    dispatch_key = str(job.get("dispatch_key") or f"{job['id']}/artifact-v1")
+    if job.get("dispatch_key") != dispatch_key:
+        job["dispatch_key"] = dispatch_key
+        save_stored_print_job(job)
+    artifacts = [
+        PrintArtifact(
+            mime_type=str(item["mime_type"]),
+            payload=base64.b64decode(str(item["data_base64"]), validate=True),
+            description=str(item.get("description") or artifact_set["description"]),
+        )
+        for item in artifact_set["artifacts"]
+    ]
+    return _printer_services().deliver_job(
+        artifacts,
+        printer,
+        copies=int(artifact_set.get("copies") or 1),
+        idempotency_key=dispatch_key,
+        description=str(artifact_set["description"]),
+        media_revision=artifact_set.get("media_revision"),
+    )
+
+
 def _process_stored_print_job(job: dict[str, Any]) -> dict[str, Any]:
-    job = dict(job)
-    job["attempts"] = int(job.get("attempts") or 0) + 1
-    job["status"] = "processing"
-    job["error"] = None
-    save_stored_print_job(job)
+    claimed = claim_stored_print_job(str(job["id"]))
+    if claimed is None:
+        return load_stored_print_job(str(job["id"]))
+    job = claimed
     try:
         if job.get("source_kind") in {"raster", "document"}:
             return _record_integration_state(_process_raster_job(job))
-        if job.get("source_kind") == "inline_template":
-            template_json = dict(job["template"])
-        else:
-            entry = load_template_entry(str(job["template_id"]))
-            template_json = json.loads(entry.template_path.read_text(encoding="utf-8"))
-        target_payload = job.get("target")
-        delivery_attempt = int(job.get("delivery_attempts") or 0) + 1
-        job["delivery_attempts"] = delivery_attempt
-        save_stored_print_job(job)
-        response = print_template(
-            str(job["printer_id"]),
-            PrintTemplateRequest(
-                template=template_json,
-                variables=dict(job.get("variables") or {}),
-                target=RenderTarget(**target_payload) if isinstance(target_payload, dict) else None,
-                return_preview=False,
-                idempotency_key=f"{job['id']}/attempt-{delivery_attempt}",
-            ),
+        printer = _get_printer(str(job["printer_id"]))
+        _ensure_printer_enabled(printer)
+        artifact_set = (
+            load_job_artifacts(str(job["id"]))
+            if job.get("source_kind") == "artifact_reprint"
+            else _prepare_template_artifact_set(job, printer)
         )
-        job["status"] = "queued" if response.job_id else "sent"
-        job["bytes_sent"] = response.bytes_sent
-        job["downstream_job_id"] = response.job_id
-        job["downstream_job_state"] = response.job_state
+        if artifact_set is None:
+            raise ValueError("Immutable print artifacts are missing")
+        job["delivery_attempts"] = int(job.get("delivery_attempts") or 0) + 1
+        save_stored_print_job(job)
+        response = _dispatch_template_artifact_set(job, printer, artifact_set)
+        job["status"] = "queued" if response.delivery_id else "sent"
+        job["bytes_sent"] = response.bytes_accepted
+        job["downstream_job_id"] = response.delivery_id
+        job["downstream_job_state"] = response.downstream_state
         job["downstream_jobs"] = (
             [
                 {
-                    "id": response.job_id,
-                    "state": response.job_state or "queued",
-                    "bytes_accepted": response.bytes_sent,
+                    "id": response.delivery_id,
+                    "state": response.downstream_state or "queued",
+                    "bytes_accepted": response.bytes_accepted,
                     "error": None,
                 }
             ]
-            if response.job_id
+            if response.delivery_id
             else []
         )
-    except (FileNotFoundError, ValueError, OSError, RuntimeError, HTTPException) as exc:
+    except ServiceUnavailable as exc:
+        job["status"] = "waiting_for_service"
+        job["error"] = str(exc)
+    except (
+        FileNotFoundError,
+        ValueError,
+        OSError,
+        RuntimeError,
+        HTTPException,
+        TemplateValidationError,
+        TemplateRenderError,
+        LayoutError,
+        CompilationError,
+    ) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         job["status"] = "failed"
         job["error"] = str(detail)
     return _record_integration_state(save_stored_print_job(job))
 
 
-_PENDING_FLEET_STATES = {
+_PENDING_SERVICE_STATES = {
     DeliveryState.QUEUED,
     DeliveryState.CONNECTING,
     DeliveryState.TRANSMITTING,
     DeliveryState.RETRY_SCHEDULED,
 }
+
+
+def _normalized_delivery_state(value: object) -> DeliveryState:
+    """Map protocol-specific downstream states to PrintHub's public state model."""
+    aliases = {
+        "completed_observed": DeliveryState.CONFIRMED,
+        "outcome_unknown": DeliveryState.UNCONFIRMED,
+    }
+    raw = str(value or DeliveryState.UNCONFIRMED.value)
+    if raw in aliases:
+        return aliases[raw]
+    try:
+        return DeliveryState(raw)
+    except ValueError:
+        return DeliveryState.UNCONFIRMED
 
 
 def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -916,7 +1231,7 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
     if not delivery_ids:
         return jobs
     try:
-        deliveries = _fleet().get_deliveries(delivery_ids)
+        deliveries = _printer_services().get_deliveries(delivery_ids)
     except (OSError, RuntimeError):
         return jobs
 
@@ -926,6 +1241,7 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
         if not entries:
             reconciled.append(job)
             continue
+        states: list[DeliveryState] = []
         for entry in entries:
             receipt = deliveries.get(str(entry["id"]))
             if receipt is not None:
@@ -934,18 +1250,21 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
                     bytes_accepted=receipt.bytes_accepted,
                     error=receipt.error,
                 )
-        states: list[DeliveryState] = []
-        for entry in entries:
-            try:
-                states.append(DeliveryState(str(entry.get("state") or "unconfirmed")))
-            except ValueError:
-                states.append(DeliveryState.UNCONFIRMED)
+                states.append(receipt.state)
+            else:
+                states.append(_normalized_delivery_state(entry.get("state")))
         if DeliveryState.UNCONFIRMED in states:
             status = DeliveryState.UNCONFIRMED.value
         elif DeliveryState.FAILED in states:
             status = DeliveryState.FAILED.value
-        elif any(state in _PENDING_FLEET_STATES for state in states):
+        elif any(state in _PENDING_SERVICE_STATES for state in states):
             status = DeliveryState.QUEUED.value
+        elif states and all(state is DeliveryState.CANCELLED for state in states):
+            status = DeliveryState.CANCELLED.value
+        elif DeliveryState.CANCELLED in states:
+            status = DeliveryState.UNCONFIRMED.value
+        elif DeliveryState.HELD in states:
+            status = DeliveryState.HELD.value
         elif states and all(state is DeliveryState.CONFIRMED for state in states):
             status = DeliveryState.CONFIRMED.value
         else:
@@ -953,16 +1272,16 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
         error = next(
             (
                 str(entry["error"])
-                for entry in entries
+                for entry, state in zip(entries, states, strict=True)
                 if entry.get("error")
-                and str(entry.get("state")) in {"unconfirmed", "failed"}
+                and state in {DeliveryState.UNCONFIRMED, DeliveryState.FAILED}
             ),
             None,
         )
         if error is None and status == DeliveryState.UNCONFIRMED.value:
-            error = "PrinterFleet reports an ambiguous delivery outcome"
+            error = "The print service reports an ambiguous delivery outcome"
         elif error is None and status == DeliveryState.FAILED.value:
-            error = "PrinterFleet delivery failed"
+            error = "Print-service delivery failed"
         first = entries[0]
         bytes_sent = sum(int(entry.get("bytes_accepted") or 0) for entry in entries)
         changed = any(
@@ -987,6 +1306,58 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
     return reconciled
 
 
+class PrintJobWorker:
+    """Durable scanner: job files are the queue; the event only reduces latency."""
+
+    def __init__(self, interval_seconds: float = 1.0) -> None:
+        self.interval_seconds = max(0.1, interval_seconds)
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="printhub-print-jobs", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def wake(self) -> None:
+        self._wake.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        self._thread.join(timeout=10)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            jobs = list(reversed(list_all_stored_print_jobs()))
+            for job in jobs:
+                if self._stop.is_set():
+                    break
+                if job.get("status") in {"queued", "waiting_for_service"} and not job.get(
+                    "downstream_job_id"
+                ):
+                    _process_stored_print_job(job)
+            pending = [job for job in jobs if job.get("downstream_job_id")]
+            if pending:
+                _reconcile_stored_print_jobs(pending)
+            self._wake.wait(self.interval_seconds)
+            self._wake.clear()
+
+
+def _background_jobs_enabled() -> bool:
+    return os.getenv("PRINTHUB_BACKGROUND_JOBS", "0").strip() == "1"
+
+
+def _process_or_wake(job: dict[str, Any]) -> dict[str, Any]:
+    if not _background_jobs_enabled():
+        return _process_stored_print_job(job)
+    worker = getattr(app.state, "print_job_worker", None)
+    if worker is not None:
+        worker.wake()
+    return job
+
+
 @app.post("/v1/print-jobs", response_model=PrintJobResponse, status_code=202)
 def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
     stored = create_stored_print_job(
@@ -998,10 +1369,11 @@ def create_print_job(payload: PrintJobCreateRequest) -> PrintJobResponse:
         idempotency_key=payload.idempotency_key,
         origin=payload.origin,
         origin_reference=payload.origin_reference,
+        output_mode=payload.output_mode,
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
-    return PrintJobResponse(**_process_stored_print_job(stored))
+    return PrintJobResponse(**_process_or_wake(stored))
 
 
 @app.post("/v1/print-jobs/raster", response_model=PrintJobResponse, status_code=202)
@@ -1033,7 +1405,7 @@ def create_raster_print_job(payload: RasterPrintJobCreateRequest) -> PrintJobRes
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
-    return PrintJobResponse(**_process_stored_print_job(stored))
+    return PrintJobResponse(**_process_or_wake(stored))
 
 
 @app.post("/v1/print-jobs/documents", response_model=PrintJobResponse, status_code=202)
@@ -1066,7 +1438,7 @@ def create_document_print_job(payload: DocumentPrintJobCreateRequest) -> PrintJo
     )
     if int(stored.get("attempts") or 0) > 0:
         return PrintJobResponse(**_reconcile_stored_print_jobs([stored])[0])
-    return PrintJobResponse(**_process_stored_print_job(stored))
+    return PrintJobResponse(**_process_or_wake(stored))
 
 
 @app.get("/v1/print-jobs", response_model=list[PrintJobResponse])
@@ -1107,8 +1479,8 @@ def release_print_job(job_id: str, payload: RasterPrintJobReleaseRequest) -> Pri
     }
     job["status"] = "queued"
     job["warning"] = None
-    save_stored_print_job(job)
-    return PrintJobResponse(**_process_stored_print_job(job))
+    job = save_stored_print_job(job)
+    return PrintJobResponse(**_process_or_wake(job))
 
 
 @app.post("/v1/print-jobs/{job_id}/retry", response_model=PrintJobResponse)
@@ -1119,9 +1491,79 @@ def retry_print_job(job_id: str) -> PrintJobResponse:
         raise HTTPException(status_code=404, detail="Print job not found") from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if job.get("status") not in {"failed", "outcome_unknown"}:
-        raise HTTPException(status_code=409, detail="Only failed print jobs can be retried")
-    return PrintJobResponse(**_process_stored_print_job(job))
+    if job.get("status") != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail="Only jobs proven not to have printed can be retried; create an explicit reprint for an unknown outcome",
+        )
+    job["status"] = "queued"
+    job["error"] = None
+    job = save_stored_print_job(job)
+    return PrintJobResponse(**_process_or_wake(job))
+
+
+@app.post("/v1/print-jobs/{job_id}/cancel", response_model=PrintJobResponse)
+def cancel_print_job(job_id: str) -> PrintJobResponse:
+    try:
+        job = load_stored_print_job(job_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Print job not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    job = _reconcile_stored_print_jobs([job])[0]
+    downstream_ids = [
+        str(item["id"])
+        for item in job.get("downstream_jobs") or []
+        if isinstance(item, dict) and item.get("id")
+    ]
+    if downstream_ids:
+        try:
+            receipts = _printer_services().cancel_deliveries(downstream_ids)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        entries = []
+        for delivery_id in downstream_ids:
+            receipt = receipts[delivery_id]
+            entries.append(
+                {
+                    "id": delivery_id,
+                    "state": receipt.downstream_state or receipt.state.value,
+                    "bytes_accepted": receipt.bytes_accepted,
+                    "error": receipt.error,
+                }
+            )
+        job["downstream_jobs"] = entries
+        job["downstream_job_state"] = entries[0]["state"]
+        job["status"] = "cancelled"
+        job["error"] = None
+        return PrintJobResponse(**save_stored_print_job(job))
+    if job.get("status") not in {"queued", "waiting_for_service", "held", "failed"}:
+        raise HTTPException(
+            status_code=409,
+            detail="The job has already entered delivery and cannot be cancelled safely",
+        )
+    job["status"] = "cancelled"
+    job["error"] = None
+    return PrintJobResponse(**save_stored_print_job(job))
+
+
+@app.post(
+    "/v1/print-jobs/{job_id}/reprint",
+    response_model=PrintJobResponse,
+    status_code=202,
+    dependencies=[Depends(require_admin)],
+)
+def reprint_print_job(job_id: str, payload: ReprintRequest) -> PrintJobResponse:
+    try:
+        original = load_stored_print_job(job_id)
+        if original.get("status") in {"queued", "processing", "waiting_for_service", "held"}:
+            raise HTTPException(status_code=409, detail="An active or held job cannot be reprinted")
+        job = create_artifact_reprint(original, idempotency_key=payload.idempotency_key)
+        return PrintJobResponse(**_process_or_wake(job))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Print job not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/v1/templates", response_model=TemplateDetailResponse)
@@ -1339,13 +1781,200 @@ def get_template_preview(template_id: str) -> Response:
 @app.get("/v1/printers", response_model=PrintersConfigResponse)
 def get_printers() -> PrintersConfigResponse:
     try:
-        printers = _fleet().list_printers()
+        service = _printer_services()
+        printers = service.list_printers()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    requested = os.getenv('ZPLGRID_DEFAULT_PRINTER_ID')
+    requested = (
+        service.default_printer_id()
+        if isinstance(service, PrinterServiceRegistry)
+        else None
+    ) or os.getenv('ZPLGRID_DEFAULT_PRINTER_ID')
     enabled = [p['id'] for p in printers if p.get('enabled', True)]
     default = requested if requested in enabled else next(iter(enabled), None)
     return PrintersConfigResponse(config_version=1, printers=printers, default_printer_id=default)
+
+
+@app.get("/v1/ipp-shares")
+def get_ipp_shares() -> dict[str, Any]:
+    return {"items": list_shares()}
+
+
+@app.put("/v1/ipp-shares/{queue_id}", dependencies=[Depends(require_admin)])
+def put_ipp_share(queue_id: str, payload: IppShareSaveRequest) -> dict[str, Any]:
+    _get_printer(payload.printer_id)
+    try:
+        return save_share(
+            queue_id,
+            printer_id=payload.printer_id,
+            display_name=payload.display_name,
+            enabled=payload.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.patch("/v1/ipp-shares/{queue_id}", dependencies=[Depends(require_admin)])
+def patch_ipp_share(queue_id: str, payload: IppShareUpdateRequest) -> dict[str, Any]:
+    try:
+        return set_share_enabled(queue_id, payload.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="IPP share not found") from None
+
+
+@app.get("/v1/printer-services", dependencies=[Depends(require_admin)])
+def get_printer_services() -> dict[str, Any]:
+    return {"items": _service_registry().list_services()}
+
+
+@app.post(
+    "/v1/printer-services", status_code=201, dependencies=[Depends(require_admin)]
+)
+def add_printer_service(payload: PrinterServiceCreateRequest) -> dict[str, Any]:
+    try:
+        return _service_registry().add_service(
+            payload.display_name, payload.base_url, payload.token.get_secret_value()
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.patch(
+    "/v1/printer-services/{connection_id}", dependencies=[Depends(require_admin)]
+)
+def update_printer_service(
+    connection_id: str, payload: PrinterServiceUpdateRequest
+) -> dict[str, Any]:
+    try:
+        return _service_registry().update_service(
+            connection_id,
+            display_name=payload.display_name,
+            base_url=payload.base_url,
+            token=payload.token.get_secret_value() if payload.token else None,
+            enabled=payload.enabled,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.patch(
+    "/v1/printers/{printer_id}/catalog",
+    dependencies=[Depends(require_admin)],
+)
+def update_printer_catalog(
+    printer_id: str, payload: PrinterCatalogUpdateRequest
+) -> dict[str, Any]:
+    try:
+        return _service_registry().update_printer_catalog(
+            printer_id,
+            display_name=payload.display_name,
+            visible=payload.visible,
+            make_default=payload.default,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Printer not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/printer-services/{connection_id}/printers/{printer_id}",
+    dependencies=[Depends(require_admin)],
+)
+def save_zebra_service_printer(
+    connection_id: str, printer_id: str, payload: ZebraPrinterSaveRequest
+) -> dict[str, Any]:
+    if not printer_id or len(printer_id) > 100 or any(
+        character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        for character in printer_id
+    ):
+        raise HTTPException(status_code=400, detail="Printer ID contains unsafe characters")
+    try:
+        return _service_registry().save_zebra_printer(
+            connection_id,
+            printer_id,
+            {"id": printer_id, "driver": "zpl", **payload.model_dump()},
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get(
+    "/v1/printer-services/{connection_id}/usb-devices",
+    dependencies=[Depends(require_admin)],
+)
+def discover_service_usb_printers(connection_id: str) -> dict[str, Any]:
+    try:
+        return {"items": _service_registry().discover_usb_printers(connection_id)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.put(
+    "/v1/printer-services/{connection_id}/printers/{printer_id}/media",
+    dependencies=[Depends(require_admin)],
+)
+def load_zebra_service_media(
+    connection_id: str, printer_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        return _service_registry().load_zebra_media(connection_id, printer_id, payload)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/printer-services/{connection_id}/printers/{printer_id}/queue/{action}",
+    dependencies=[Depends(require_admin)],
+)
+def control_service_printer_queue(
+    connection_id: str, printer_id: str, action: str
+) -> dict[str, Any]:
+    if action not in {"pause", "resume"}:
+        raise HTTPException(status_code=400, detail="Queue action must be pause or resume")
+    try:
+        return _service_registry().set_queue_paused(
+            connection_id, printer_id, action == "pause"
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post(
+    "/v1/printer-services/{connection_id}/printers/{printer_id}/maintenance/{action}",
+    dependencies=[Depends(require_admin)],
+)
+def maintain_service_printer(
+    connection_id: str, printer_id: str, action: str
+) -> dict[str, Any]:
+    if action not in {
+        "print-configuration",
+        "print-network-configuration",
+        "calibrate-media",
+    }:
+        raise HTTPException(status_code=400, detail="Unsupported maintenance action")
+    try:
+        return _service_registry().run_maintenance(connection_id, printer_id, action)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Print service not found") from None
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/v1/printers/{printer_id}")

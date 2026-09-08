@@ -126,7 +126,7 @@ def encode_zpl_graphic(page: PreparedRasterPage) -> str:
 
 
 def encode_prepared_raster(page: PreparedRasterPage, *, copies: int) -> bytes:
-    """Serialize a device-independent, one-bit page for a Fleet driver."""
+    """Serialize a device-independent, one-bit page for a print service."""
     if not 1 <= copies <= 999:
         raise ValueError("copies must be between 1 and 999")
     image = page.monochrome

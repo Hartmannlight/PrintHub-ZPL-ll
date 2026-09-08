@@ -2,30 +2,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 
 class DeliveryState(str, Enum):
-    """Transport state reported by a printer fleet implementation."""
-
     QUEUED = "queued"
+    HELD = "held"
     CONNECTING = "connecting"
     TRANSMITTING = "transmitting"
     TRANSPORT_ACCEPTED = "transport_accepted"
     CONFIRMED = "confirmed"
     UNCONFIRMED = "unconfirmed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     RETRY_SCHEDULED = "retry_scheduled"
 
 
-class FleetConflict(RuntimeError):
-    """Optimistic-concurrency or idempotency conflict reported by PrinterFleet."""
+class ServiceConflict(RuntimeError):
+    """Identity, revision, or idempotency conflict from a print service."""
+
+
+class ServiceUnavailable(RuntimeError):
+    """The print service cannot currently be reached or is not ready."""
 
 
 @dataclass(frozen=True)
 class PrintArtifact:
-    """Immutable device payload submitted across the fleet boundary."""
-
     mime_type: str
     payload: bytes
     description: str
@@ -34,8 +36,6 @@ class PrintArtifact:
 
 @dataclass(frozen=True)
 class DeliveryReceipt:
-    """Fleet receipt without claiming that a socket write printed a label."""
-
     bytes_accepted: int
     state: DeliveryState
     delivery_id: str | None = None
@@ -52,30 +52,35 @@ class DeliveryReceipt:
 
 
 class ArtifactDeliveryPort(Protocol):
-    """Submit an already prepared artifact to a physical-delivery boundary."""
-
     def deliver(
+        self, artifact: PrintArtifact, printer: Mapping[str, Any]
+    ) -> DeliveryReceipt: ...
+
+    def deliver_job(
         self,
-        artifact: PrintArtifact,
+        artifacts: Sequence[PrintArtifact],
         printer: Mapping[str, Any],
+        *,
+        copies: int,
+        idempotency_key: str,
+        description: str,
+        media_revision: str | None = None,
     ) -> DeliveryReceipt: ...
 
     def get_deliveries(
         self, delivery_ids: list[str]
     ) -> dict[str, DeliveryReceipt]: ...
 
+    def cancel_deliveries(
+        self, delivery_ids: list[str]
+    ) -> dict[str, DeliveryReceipt]: ...
+
 
 class PrinterCatalogPort(Protocol):
-    """Read fleet-owned printer capability snapshots."""
-
     def list_printers(self) -> list[dict[str, Any]]: ...
 
     def get_printer(self, printer_id: str) -> dict[str, Any]: ...
 
 
-class PrinterFleetPort(
-    ArtifactDeliveryPort,
-    PrinterCatalogPort,
-    Protocol,
-):
-    """Narrow boundary used by PrintHub for capability reads and delivery."""
+class PrinterServicePort(ArtifactDeliveryPort, PrinterCatalogPort, Protocol):
+    """Manufacturer-neutral boundary from PrintHub to physical print services."""

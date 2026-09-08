@@ -1,0 +1,8 @@
+{
+  "protocol": {"name": "printhub-print-service", "major": 2, "minor": 0},
+  "service_id": "ci-raster-simulator",
+  "service_type": "raster_test_service",
+  "display_name": "Raster test service (simulation)",
+  "version": "0.1.0",
+  "capabilities": ["catalog", "jobs", "idempotency_lookup", "simulated_confirmation"]
+}

@@ -46,12 +46,9 @@ def main():
             assert json.loads(data)['status'] == 'ok'
             with urllib.request.urlopen(base + '/openapi.json', timeout=3) as response:
                 assert '/v1/printers' in json.load(response)['paths']
-            try:
-                urllib.request.urlopen(base + '/v1/printers', timeout=3)
-            except urllib.error.HTTPError as exc:
-                assert exc.code == 503
-            else:
-                raise AssertionError('Printer catalog must fail closed without PrinterFleet')
+            with urllib.request.urlopen(base + '/v1/printers', timeout=3) as response:
+                catalog = json.load(response)
+                assert isinstance(catalog.get('printers'), list)
         else:
             assert json.loads(data)['status'] == 'ok'
             with urllib.request.urlopen(base + '/api/settings', timeout=3) as response:

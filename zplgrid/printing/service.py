@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
+import uuid
 
-from ..fleet.ports import ArtifactDeliveryPort
+from ..printer_services.ports import ArtifactDeliveryPort
 from .domain import ContentOptimize, DitherMode, RasterPageSource, RasterTarget, ScalingPolicy
 from .raster import PreparedRasterPage, encode_prepared_raster, prepare_raster_page
-from ..fleet.ports import PrintArtifact
+from ..printer_services.ports import PrintArtifact
 
 
 @dataclass(frozen=True)
@@ -67,32 +68,26 @@ def dispatch_document(
 ) -> DocumentDispatchResult:
     if not 1 <= copies <= 999:
         raise ValueError("copies must be between 1 and 999")
-    bytes_sent = 0
-    job_ids: list[str] = []
-    job_states: list[str] = []
-    delivery_states: list[str] = []
-    for page_number, page in enumerate(prepared_pages, start=1):
-        artifact = PrintArtifact(
+    artifacts = [
+        PrintArtifact(
             mime_type="application/vnd.printhub.raster-page+json",
-            payload=encode_prepared_raster(page, copies=copies),
+            payload=encode_prepared_raster(page, copies=1),
             description="Prepared raster document",
         )
-        if idempotency_key_prefix:
-            artifact = replace(
-                artifact,
-                idempotency_key=f"{idempotency_key_prefix}/page-{page_number}",
-            )
-        receipt = delivery_port.deliver(artifact, printer)
-        bytes_sent += receipt.bytes_accepted
-        delivery_states.append(receipt.state.value)
-        if receipt.delivery_id:
-            job_ids.append(receipt.delivery_id)
-        if receipt.downstream_state:
-            job_states.append(receipt.downstream_state)
+        for page in prepared_pages
+    ]
+    receipt = delivery_port.deliver_job(
+        artifacts,
+        printer,
+        copies=copies,
+        idempotency_key=idempotency_key_prefix or str(uuid.uuid4()),
+        description="Prepared raster document",
+        media_revision=(printer.get("media") or {}).get("revision"),
+    )
     return DocumentDispatchResult(
-        bytes_sent=bytes_sent,
+        bytes_sent=receipt.bytes_accepted,
         previews=tuple(page.preview_png for page in prepared_pages),
-        downstream_job_ids=tuple(job_ids),
-        downstream_job_states=tuple(job_states),
-        delivery_states=tuple(delivery_states),
+        downstream_job_ids=(receipt.delivery_id,) if receipt.delivery_id else (),
+        downstream_job_states=(receipt.downstream_state,) if receipt.downstream_state else (),
+        delivery_states=(receipt.state.value,),
     )
