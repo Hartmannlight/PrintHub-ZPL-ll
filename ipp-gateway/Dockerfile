@@ -10,6 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PRINTHUB_IPP_MISMATCH_POLICY=hold
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends avahi-daemon ca-certificates cups-ipp-utils dbus-daemon \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip uninstall -y pip setuptools wheel jaraco.context \
