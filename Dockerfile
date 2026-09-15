@@ -6,7 +6,7 @@ WORKDIR /app
 
 FROM base AS dependencies
 # renovate: datasource=pypi depName=poetry
-ARG POETRY_VERSION=2.4.1
+ARG POETRY_VERSION=2.4.3
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir poetry==$POETRY_VERSION
