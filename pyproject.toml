@@ -16,7 +16,7 @@ requests = "^2.32.0"
 segno = "^1.6.1"
 pylibdmtx = "^0.1.10"
 pyyaml = "^6.0.2"
-python-dotenv = "^1.2.1"
+python-dotenv = "^1.2.3"
 zeroconf = "^0.147.0"
 
 [tool.poetry.group.dev.dependencies]
