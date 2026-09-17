@@ -8,7 +8,7 @@ packages = [{ include = "zplgrid" }]
 
 [tool.poetry.dependencies]
 python = ">=3.10"
-jsonschema = ">=4"
+jsonschema = ">=4.26.0"
 fastapi = "^0.141.1"
 uvicorn = "^0.30.0"
 pillow = "^12.3.0"
