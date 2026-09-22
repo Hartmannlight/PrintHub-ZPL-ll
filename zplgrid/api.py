@@ -53,6 +53,9 @@ from .print_jobs_store import (
     load_job as load_stored_print_job,
     load_job_document,
     recover_interrupted_jobs,
+    prepare_retry,
+    RetryNotAllowed,
+    save_reconciled_job,
     save_job_artifacts,
     save_job as save_stored_print_job,
 )
@@ -1302,7 +1305,7 @@ def _reconcile_stored_print_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, A
             bytes_sent=bytes_sent,
             error=error,
         )
-        reconciled.append(save_stored_print_job(job) if changed else job)
+        reconciled.append(save_reconciled_job(job, expected_dispatch_key=original.get("dispatch_key")) if changed else job)
     return reconciled
 
 
@@ -1486,19 +1489,13 @@ def release_print_job(job_id: str, payload: RasterPrintJobReleaseRequest) -> Pri
 @app.post("/v1/print-jobs/{job_id}/retry", response_model=PrintJobResponse)
 def retry_print_job(job_id: str) -> PrintJobResponse:
     try:
-        job = load_stored_print_job(job_id)
+        job = prepare_retry(job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Print job not found") from None
+    except RetryNotAllowed as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if job.get("status") != "failed":
-        raise HTTPException(
-            status_code=409,
-            detail="Only jobs proven not to have printed can be retried; create an explicit reprint for an unknown outcome",
-        )
-    job["status"] = "queued"
-    job["error"] = None
-    job = save_stored_print_job(job)
     return PrintJobResponse(**_process_or_wake(job))
 
 
