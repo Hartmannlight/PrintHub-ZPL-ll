@@ -18,6 +18,10 @@ class IdempotencyConflict(ValueError):
     pass
 
 
+class RetryNotAllowed(ValueError):
+    pass
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -299,6 +303,39 @@ def claim_job(job_id: str) -> dict[str, Any] | None:
         payload["updated_at"] = _now()
         _write_atomic(_job_path(job_id), payload)
         return payload
+
+
+def prepare_retry(job_id: str) -> dict[str, Any]:
+    """Rotate the delivery key only for an explicitly retried, failed delivery."""
+    with _jobs_lock:
+        payload = load_job(job_id)
+        if payload.get("status") != "failed":
+            raise RetryNotAllowed("Only jobs proven not to have printed can be retried")
+        deliveries = payload.get("downstream_jobs") or []
+        if not deliveries and payload.get("downstream_job_id"):
+            deliveries = [{"id": payload["downstream_job_id"], "state": payload.get("downstream_job_state")}]
+        if deliveries:
+            if any(delivery.get("state") != "failed" for delivery in deliveries):
+                raise RetryNotAllowed("A partially printed or ambiguous job requires an explicit reprint")
+            payload.setdefault("delivery_history", []).append({
+                "dispatch_key": payload.get("dispatch_key"),
+                "downstream_jobs": deliveries,
+            })
+            payload["dispatch_key"] = f"{job_id}/retry/{uuid.uuid4()}"
+            payload.update(downstream_job_id=None, downstream_job_state=None, downstream_jobs=[], bytes_sent=None)
+        # Without a service receipt, retain the original key: an accepted request
+        # could have lost its response. Resubmission must still deduplicate it.
+        payload.update(status="queued", error=None)
+        return save_job(payload)
+
+
+def save_reconciled_job(payload: dict[str, Any], *, expected_dispatch_key: str | None) -> dict[str, Any]:
+    """An in-flight status read from the old attempt must not undo a retry."""
+    with _jobs_lock:
+        current = load_job(str(payload["id"]))
+        if current.get("dispatch_key") != expected_dispatch_key:
+            return current
+        return save_job(payload)
 
 
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:

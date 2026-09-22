@@ -148,6 +148,7 @@ class HttpPrintServiceAdapter:
             "held": DeliveryState.HELD,
             "receiving": DeliveryState.CONNECTING,
             "writing": DeliveryState.TRANSMITTING,
+            "transmitting": DeliveryState.TRANSMITTING,
             "verifying": DeliveryState.TRANSMITTING,
             "transport_accepted": DeliveryState.TRANSPORT_ACCEPTED,
             "completed_observed": DeliveryState.CONFIRMED,
