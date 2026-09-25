@@ -565,6 +565,62 @@
         }
       }
     },
+    "/v1/template-assistant/generate": {
+      "post": {
+        "summary": "Generate Template With Ai",
+        "operationId": "generate_template_with_ai_v1_template_assistant_generate_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateAIGenerateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateAIGenerateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/templates": {
       "post": {
         "summary": "Save Template",
@@ -720,6 +776,129 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TemplateDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/template-preview-settings": {
+      "get": {
+        "summary": "Get Template Preview Settings",
+        "operationId": "get_template_preview_settings_v1_template_preview_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreviewSettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates/previews/regenerate": {
+      "post": {
+        "summary": "Regenerate Template Previews",
+        "operationId": "regenerate_template_previews_v1_templates_previews_regenerate_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplatePreviewRegenerateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreviewRegenerateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates/{template_id}/metadata": {
+      "patch": {
+        "summary": "Update Template Metadata",
+        "operationId": "update_template_metadata_v1_templates__template_id__metadata_patch",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateMetadataPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateListItem"
                 }
               }
             }
@@ -2628,6 +2807,132 @@
         "title": "ScalingPolicy",
         "description": "How a document page is mapped to the loaded label."
       },
+      "TemplateAIGenerateRequest": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 10,
+            "title": "Prompt"
+          },
+          "target": {
+            "$ref": "#/components/schemas/RenderTarget"
+          },
+          "use_existing": {
+            "type": "boolean",
+            "title": "Use Existing",
+            "default": false
+          },
+          "reference_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Reference Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "target"
+        ],
+        "title": "TemplateAIGenerateRequest"
+      },
+      "TemplateAIGenerateResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "usage_context": {
+            "type": "string",
+            "title": "Usage Context"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "variables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Variables"
+          },
+          "sample_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Sample Data"
+          },
+          "print_defaults": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Print Defaults"
+          },
+          "template": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Template"
+          },
+          "preview_target": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Preview Target"
+          },
+          "reference_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reference Ids"
+          },
+          "preview_png_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Png Base64"
+          },
+          "preview_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "usage_context",
+          "tags",
+          "variables",
+          "sample_data",
+          "print_defaults",
+          "template",
+          "preview_target",
+          "reference_ids"
+        ],
+        "title": "TemplateAIGenerateResponse"
+      },
       "TemplateDetailResponse": {
         "properties": {
           "id": {
@@ -2637,6 +2942,22 @@
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "usage_context": {
+            "type": "string",
+            "title": "Usage Context"
+          },
+          "favorite": {
+            "type": "boolean",
+            "title": "Favorite"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
           },
           "tags": {
             "items": {
@@ -2671,18 +2992,49 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Sample Data"
+          },
+          "print_defaults": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Print Defaults"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "preview_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Warning"
           }
         },
         "type": "object",
         "required": [
           "id",
           "name",
+          "description",
+          "usage_context",
+          "favorite",
+          "archived",
           "tags",
           "variables",
           "preview_target",
           "preview_available",
           "template",
-          "sample_data"
+          "sample_data",
+          "print_defaults",
+          "created_at",
+          "updated_at"
         ],
         "title": "TemplateDetailResponse"
       },
@@ -2696,6 +3048,22 @@
             "type": "string",
             "title": "Name"
           },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "usage_context": {
+            "type": "string",
+            "title": "Usage Context"
+          },
+          "favorite": {
+            "type": "boolean",
+            "title": "Favorite"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          },
           "tags": {
             "items": {
               "type": "string"
@@ -2719,24 +3087,186 @@
           "preview_available": {
             "type": "boolean",
             "title": "Preview Available"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
           }
         },
         "type": "object",
         "required": [
           "id",
           "name",
+          "description",
+          "usage_context",
+          "favorite",
+          "archived",
           "tags",
           "variables",
           "preview_target",
-          "preview_available"
+          "preview_available",
+          "created_at",
+          "updated_at"
         ],
         "title": "TemplateListItem"
+      },
+      "TemplateMetadataPatchRequest": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "usage_context": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Context"
+          },
+          "favorite": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Favorite"
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          }
+        },
+        "type": "object",
+        "title": "TemplateMetadataPatchRequest"
+      },
+      "TemplatePreviewRegenerateRequest": {
+        "properties": {
+          "template_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Template Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_ids"
+        ],
+        "title": "TemplatePreviewRegenerateRequest"
+      },
+      "TemplatePreviewRegenerateResponse": {
+        "properties": {
+          "regenerated": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Regenerated"
+          },
+          "failed": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "regenerated",
+          "failed"
+        ],
+        "title": "TemplatePreviewRegenerateResponse"
+      },
+      "TemplatePreviewSettingsResponse": {
+        "properties": {
+          "stored_enabled": {
+            "type": "boolean",
+            "title": "Stored Enabled"
+          },
+          "live_enabled": {
+            "type": "boolean",
+            "title": "Live Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stored_enabled",
+          "live_enabled"
+        ],
+        "title": "TemplatePreviewSettingsResponse"
       },
       "TemplateSaveRequest": {
         "properties": {
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          },
+          "usage_context": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Usage Context",
+            "default": ""
+          },
+          "favorite": {
+            "type": "boolean",
+            "title": "Favorite",
+            "default": false
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived",
+            "default": false
           },
           "tags": {
             "items": {
@@ -2762,6 +3292,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Sample Data"
+          },
+          "print_defaults": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Print Defaults"
           },
           "preview_target": {
             "$ref": "#/components/schemas/RenderTarget"

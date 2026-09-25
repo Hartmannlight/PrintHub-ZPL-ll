@@ -17,6 +17,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, SecretStr, model_validator
+import requests
 
 from .exceptions import CompilationError, LayoutError, TemplateRenderError, TemplateValidationError
 from .compiler import Compiler
@@ -75,7 +76,8 @@ from .printing.service import (
 )
 from .printing.raster import encode_prepared_raster, prepare_raster_page
 from .render import RenderOptions, render_text
-from .templates_store import load_template_entry, list_templates, save_template_entry, seed_bundled_templates, update_template_entry
+from .templates_store import load_template_entry, list_templates, patch_template_metadata, save_template_entry, seed_bundled_templates, update_template_entry
+from .template_ai import generate_template_draft
 
 
 class RenderTarget(BaseModel):
@@ -612,31 +614,94 @@ class PrintDraftDetailResponse(BaseModel):
 
 class TemplateSaveRequest(BaseModel):
     name: str
+    description: str = Field(default='', max_length=2000)
+    usage_context: str = Field(default='', max_length=4000)
+    favorite: bool = False
+    archived: bool = False
     tags: list[str] = Field(default_factory=list)
     variables: list[dict[str, Any]] = Field(default_factory=list)
     template: dict[str, Any]
     sample_data: dict[str, Any]
+    print_defaults: dict[str, Any] = Field(default_factory=dict)
     preview_target: RenderTarget
+
+
+class TemplateMetadataPatchRequest(BaseModel):
+    description: str | None = Field(default=None, max_length=2000)
+    usage_context: str | None = Field(default=None, max_length=4000)
+    favorite: bool | None = None
+    archived: bool | None = None
+    tags: list[str] | None = None
 
 
 class TemplateListItem(BaseModel):
     id: str
     name: str
+    description: str
+    usage_context: str
+    favorite: bool
+    archived: bool
     tags: list[str]
     variables: list[dict[str, Any]]
     preview_target: dict[str, Any]
     preview_available: bool
+    created_at: str
+    updated_at: str
 
 
 class TemplateDetailResponse(BaseModel):
     id: str
     name: str
+    description: str
+    usage_context: str
+    favorite: bool
+    archived: bool
     tags: list[str]
     variables: list[dict[str, Any]]
     preview_target: dict[str, Any]
     preview_available: bool
     template: dict[str, Any]
     sample_data: dict[str, Any]
+    print_defaults: dict[str, Any]
+    created_at: str
+    updated_at: str
+    preview_warning: str | None = None
+
+
+class TemplateAIGenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=10, max_length=4000)
+    target: RenderTarget
+    use_existing: bool = False
+    reference_ids: list[str] = Field(default_factory=list, max_length=3)
+
+
+class TemplateAIGenerateResponse(BaseModel):
+    name: str
+    description: str
+    usage_context: str
+    tags: list[str]
+    variables: list[dict[str, Any]]
+    sample_data: dict[str, Any]
+    print_defaults: dict[str, Any]
+    template: dict[str, Any]
+    preview_target: dict[str, Any]
+    reference_ids: list[str]
+    preview_png_base64: str | None = None
+    preview_error: str | None = None
+
+
+class TemplatePreviewSettingsResponse(BaseModel):
+    stored_enabled: bool
+    live_enabled: bool
+
+
+class TemplatePreviewRegenerateRequest(BaseModel):
+    template_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+class TemplatePreviewRegenerateResponse(BaseModel):
+    regenerated: list[str]
+    failed: dict[str, str]
 
 
 def _get_printer(printer_id: str) -> dict[str, Any]:
@@ -1563,8 +1628,80 @@ def reprint_print_job(job_id: str, payload: ReprintRequest) -> PrintJobResponse:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post('/v1/template-assistant/generate', response_model=TemplateAIGenerateResponse, dependencies=[Depends(require_admin)])
+def generate_template_with_ai(payload: TemplateAIGenerateRequest) -> TemplateAIGenerateResponse:
+    try:
+        draft = generate_template_draft(
+            payload.prompt,
+            width_mm=payload.target.width_mm,
+            height_mm=payload.target.height_mm,
+            dpi=payload.target.dpi,
+            use_existing=payload.use_existing,
+            reference_ids=payload.reference_ids,
+        )
+        if len(json.dumps(draft['template'])) > 100_000:
+            raise ValueError('Generated template is too large')
+        template = load_template(draft['template'])
+        used_names = collect_template_placeholders(template)
+        defined_names = {str(item.get('name')) for item in draft['variables'] if isinstance(item, dict)}
+        undefined = sorted(used_names - defined_names)
+        blank_samples = sorted(name for name in used_names if not str(draft['sample_data'].get(name, '')).strip())
+        if undefined or blank_samples:
+            raise ValueError(f'Missing variable definitions: {undefined}; blank sample values: {blank_samples}')
+        if any(isinstance(element, dict) and element.get('type') == 'image'
+               for element in _walk_template_elements(draft['template'].get('layout', {}))):
+            raise ValueError('Generated image elements are not supported')
+        _assert_variables_present(template, draft['sample_data'])
+        zpl = template.compile(
+            target=LabelTarget(
+                width_mm=payload.target.width_mm,
+                height_mm=payload.target.height_mm,
+                dpi=payload.target.dpi,
+            ),
+            variables=draft['sample_data'],
+            debug=False,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=f'Reference template not found: {exc}') from exc
+    except (TemplateValidationError, TemplateRenderError, CompilationError, LayoutError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=502, detail=f'AI draft did not pass template validation: {exc}') from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    preview_png_base64 = None
+    preview_error = None
+    if _labelary_templates_enabled():
+        try:
+            dpmm, width_in, height_in = _target_to_labelary_args(payload.target)
+            preview_png_base64 = base64.b64encode(render_labelary_png_bytes(
+                zpl, dpmm=dpmm, label_width_in=width_in,
+                label_height_in=height_in, index=0, timeout_s=30,
+            )).decode('ascii')
+        except (RuntimeError, TemplateRenderError, requests.RequestException) as exc:
+            preview_error = str(exc)
+    else:
+        preview_error = 'Stored template previews are disabled'
+    return TemplateAIGenerateResponse(
+        name=draft['name'], description=draft['description'], usage_context=draft['usage_context'],
+        tags=draft['tags'], variables=draft['variables'], sample_data=draft['sample_data'],
+        print_defaults={}, template=draft['template'],
+        preview_target=payload.target.model_dump(), reference_ids=draft['reference_ids'],
+        preview_png_base64=preview_png_base64, preview_error=preview_error,
+    )
+
+
+def _walk_template_elements(node: dict[str, Any]) -> list[dict[str, Any]]:
+    if node.get('kind') == 'leaf':
+        return [item for item in node.get('elements', []) if isinstance(item, dict)]
+    result: list[dict[str, Any]] = []
+    for child in node.get('children', []):
+        if isinstance(child, dict):
+            result.extend(_walk_template_elements(child))
+    return result
+
+
 @app.post("/v1/templates", response_model=TemplateDetailResponse)
 def save_template(payload: TemplateSaveRequest) -> TemplateDetailResponse:
+    preview_warning = None
     try:
         template = load_template(payload.template)
         used_names = collect_template_placeholders(template)
@@ -1592,21 +1729,25 @@ def save_template(payload: TemplateSaveRequest) -> TemplateDetailResponse:
             )
             zpl = template.compile(target=target, variables=variables, debug=False)
             dpmm, width_in, height_in = _target_to_labelary_args(payload.preview_target)
-            preview_png = render_labelary_png_bytes(
-                zpl,
-                dpmm=dpmm,
-                label_width_in=width_in,
-                label_height_in=height_in,
-                index=0,
-                timeout_s=30,
-            )
+            try:
+                preview_png = render_labelary_png_bytes(
+                    zpl, dpmm=dpmm, label_width_in=width_in,
+                    label_height_in=height_in, index=0, timeout_s=30,
+                )
+            except (RuntimeError, TemplateRenderError, requests.RequestException) as exc:
+                preview_warning = str(exc)
         entry = save_template_entry(
             name=payload.name,
+            description=payload.description,
+            usage_context=payload.usage_context,
+            favorite=payload.favorite,
+            archived=payload.archived,
             tags=payload.tags,
             variables=payload.variables,
             preview_target=payload.preview_target.model_dump(),
             template=payload.template,
             sample_data=payload.sample_data,
+            print_defaults=payload.print_defaults,
             preview_png=preview_png,
         )
     except TemplateValidationError as exc:
@@ -1625,18 +1766,28 @@ def save_template(payload: TemplateSaveRequest) -> TemplateDetailResponse:
     return TemplateDetailResponse(
         id=entry.template_id,
         name=entry.name,
+        description=entry.description,
+        usage_context=entry.usage_context,
+        favorite=entry.favorite,
+        archived=entry.archived,
         tags=entry.tags,
         variables=entry.variables,
         preview_target=entry.preview_target,
         preview_available=entry.preview_path.exists(),
         template=template_json,
         sample_data=sample_json,
+        print_defaults=entry.print_defaults,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        preview_warning=preview_warning,
     )
 
 
 @app.put("/v1/templates/{template_id}", response_model=TemplateDetailResponse)
 def update_template(template_id: str, payload: TemplateSaveRequest) -> TemplateDetailResponse:
+    preview_warning = None
     try:
+        previous = load_template_entry(template_id)
         template = load_template(payload.template)
         used_names = collect_template_placeholders(template)
         macro_vars = build_macro_variables(
@@ -1663,22 +1814,26 @@ def update_template(template_id: str, payload: TemplateSaveRequest) -> TemplateD
             )
             zpl = template.compile(target=target, variables=variables, debug=False)
             dpmm, width_in, height_in = _target_to_labelary_args(payload.preview_target)
-            preview_png = render_labelary_png_bytes(
-                zpl,
-                dpmm=dpmm,
-                label_width_in=width_in,
-                label_height_in=height_in,
-                index=0,
-                timeout_s=30,
-            )
+            try:
+                preview_png = render_labelary_png_bytes(
+                    zpl, dpmm=dpmm, label_width_in=width_in,
+                    label_height_in=height_in, index=0, timeout_s=30,
+                )
+            except (RuntimeError, TemplateRenderError, requests.RequestException) as exc:
+                preview_warning = str(exc)
         entry = update_template_entry(
             template_id=template_id,
             name=payload.name,
+            description=payload.description if 'description' in payload.model_fields_set else previous.description,
+            usage_context=payload.usage_context if 'usage_context' in payload.model_fields_set else previous.usage_context,
+            favorite=payload.favorite if 'favorite' in payload.model_fields_set else previous.favorite,
+            archived=payload.archived if 'archived' in payload.model_fields_set else previous.archived,
             tags=payload.tags,
             variables=payload.variables,
             preview_target=payload.preview_target.model_dump(),
             template=payload.template,
             sample_data=payload.sample_data,
+            print_defaults=payload.print_defaults if 'print_defaults' in payload.model_fields_set else previous.print_defaults,
             preview_png=preview_png,
         )
     except FileNotFoundError:
@@ -1699,12 +1854,20 @@ def update_template(template_id: str, payload: TemplateSaveRequest) -> TemplateD
     return TemplateDetailResponse(
         id=entry.template_id,
         name=entry.name,
+        description=entry.description,
+        usage_context=entry.usage_context,
+        favorite=entry.favorite,
+        archived=entry.archived,
         tags=entry.tags,
         variables=entry.variables,
         preview_target=entry.preview_target,
         preview_available=entry.preview_path.exists(),
         template=template_json,
         sample_data=sample_json,
+        print_defaults=entry.print_defaults,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        preview_warning=preview_warning,
     )
 
 
@@ -1720,13 +1883,85 @@ def list_template_entries(tags: Optional[str] = None) -> list[TemplateListItem]:
             TemplateListItem(
                 id=entry.template_id,
                 name=entry.name,
+                description=entry.description,
+                usage_context=entry.usage_context,
+                favorite=entry.favorite,
+                archived=entry.archived,
                 tags=entry.tags,
                 variables=entry.variables,
                 preview_target=entry.preview_target,
                 preview_available=entry.preview_path.exists(),
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
             )
         )
     return result
+
+
+@app.get('/v1/template-preview-settings', response_model=TemplatePreviewSettingsResponse)
+def get_template_preview_settings() -> TemplatePreviewSettingsResponse:
+    return TemplatePreviewSettingsResponse(
+        stored_enabled=_labelary_templates_enabled(), live_enabled=_labelary_api_enabled(),
+    )
+
+
+@app.post('/v1/templates/previews/regenerate', response_model=TemplatePreviewRegenerateResponse, dependencies=[Depends(require_admin)])
+def regenerate_template_previews(payload: TemplatePreviewRegenerateRequest) -> TemplatePreviewRegenerateResponse:
+    if not _labelary_templates_enabled():
+        raise HTTPException(status_code=409, detail='Stored template previews are disabled')
+    regenerated: list[str] = []
+    failed: dict[str, str] = {}
+    for template_id in dict.fromkeys(payload.template_ids):
+        try:
+            entry = load_template_entry(template_id)
+            raw_template = json.loads(entry.template_path.read_text(encoding='utf-8'))
+            sample_data = json.loads(entry.sample_data_path.read_text(encoding='utf-8'))
+            template = load_template(raw_template)
+            target = RenderTarget.model_validate(entry.preview_target)
+            used_names = collect_template_placeholders(template)
+            macro_vars = build_macro_variables(
+                used_names, existing_variables=sample_data,
+                context=MacroContext(
+                    template_name=entry.name, printer_id=None, draft_id=None,
+                    now=now_for_macros(), increment_counters=False,
+                ),
+            )
+            variables = {**macro_vars, **sample_data}
+            _assert_variables_present(template, variables)
+            zpl = template.compile(target=LabelTarget(**target.model_dump()), variables=variables, debug=False)
+            dpmm, width_in, height_in = _target_to_labelary_args(target)
+            image = render_labelary_png_bytes(
+                zpl, dpmm=dpmm, label_width_in=width_in, label_height_in=height_in,
+                index=0, timeout_s=30,
+            )
+            temporary = entry.preview_path.with_suffix('.tmp')
+            temporary.write_bytes(image)
+            temporary.replace(entry.preview_path)
+            regenerated.append(template_id)
+        except (FileNotFoundError, ValueError, RuntimeError, TemplateValidationError,
+                TemplateRenderError, CompilationError, LayoutError, OSError) as exc:
+            failed[template_id] = str(exc)
+    return TemplatePreviewRegenerateResponse(regenerated=regenerated, failed=failed)
+
+
+@app.patch('/v1/templates/{template_id}/metadata', response_model=TemplateListItem)
+def update_template_metadata(template_id: str, payload: TemplateMetadataPatchRequest) -> TemplateListItem:
+    changes = payload.model_dump(exclude_unset=True)
+    if any(value is None for value in changes.values()):
+        raise HTTPException(status_code=400, detail='Metadata fields cannot be null')
+    try:
+        entry = patch_template_metadata(template_id, changes)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f'Template not found: {template_id}') from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return TemplateListItem(
+        id=entry.template_id, name=entry.name, description=entry.description,
+        usage_context=entry.usage_context, favorite=entry.favorite, archived=entry.archived,
+        tags=entry.tags, variables=entry.variables, preview_target=entry.preview_target,
+        preview_available=entry.preview_path.exists(), created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
 
 
 @app.get("/v1/templates/{template_id}", response_model=TemplateDetailResponse)
@@ -1747,12 +1982,19 @@ def get_template_entry(template_id: str) -> TemplateDetailResponse:
     return TemplateDetailResponse(
         id=entry.template_id,
         name=entry.name,
+        description=entry.description,
+        usage_context=entry.usage_context,
+        favorite=entry.favorite,
+        archived=entry.archived,
         tags=entry.tags,
         variables=entry.variables,
         preview_target=entry.preview_target,
         preview_available=entry.preview_path.exists(),
         template=template_json,
         sample_data=sample_json,
+        print_defaults=entry.print_defaults,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
     )
 
 

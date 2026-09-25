@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -24,6 +25,13 @@ class TemplateEntry:
     tags: list[str]
     variables: list[dict[str, Any]]
     preview_target: dict[str, Any]
+    description: str
+    usage_context: str
+    favorite: bool
+    archived: bool
+    print_defaults: dict[str, Any]
+    created_at: str
+    updated_at: str
     dir_path: Path
 
     @property
@@ -114,6 +122,38 @@ def _load_metadata(path: Path) -> dict[str, Any]:
     return raw
 
 
+def _entry_from_metadata(template_id: str, dir_path: Path, metadata: Mapping[str, Any]) -> TemplateEntry:
+    saved_defaults = metadata.get('print_defaults')
+    print_defaults = (dict(saved_defaults) if isinstance(saved_defaults, Mapping)
+                      else {})
+    return TemplateEntry(
+        template_id=template_id,
+        name=str(metadata.get('name') or template_id),
+        tags=[str(tag) for tag in metadata.get('tags') or []],
+        variables=[dict(item) for item in (metadata.get('variables') or []) if isinstance(item, Mapping)],
+        preview_target=dict(metadata.get('preview_target') or {}),
+        description=str(metadata.get('description') or ''),
+        usage_context=str(metadata.get('usage_context') or ''),
+        favorite=metadata.get('favorite') is True,
+        archived=metadata.get('archived') is True,
+        print_defaults=print_defaults,
+        created_at=str(metadata.get('created_at') or ''),
+        updated_at=str(metadata.get('updated_at') or ''),
+        dir_path=dir_path,
+    )
+
+
+def _load_sample_data(path: Path) -> dict[str, Any]:
+    data = _load_metadata(path)
+    return dict(data)
+
+
+def _write_metadata(path: Path, metadata: Mapping[str, Any]) -> None:
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding='utf-8')
+    temporary.replace(path)
+
+
 def list_templates(*, tags: set[str] | None = None) -> list[TemplateEntry]:
     root = ensure_templates_dir()
     entries: list[TemplateEntry] = []
@@ -125,23 +165,11 @@ def list_templates(*, tags: set[str] | None = None) -> list[TemplateEntry]:
             continue
         metadata = _load_metadata(metadata_path)
         template_id = str(metadata.get('id') or entry.name)
-        name = str(metadata.get('name') or template_id)
         tag_list = [str(tag) for tag in metadata.get('tags') or []]
-        variables = [dict(item) for item in (metadata.get('variables') or []) if isinstance(item, Mapping)]
-        preview_target = dict(metadata.get('preview_target') or {})
         if tags:
             if not tags.issubset(set(tag_list)):
                 continue
-        entries.append(
-            TemplateEntry(
-                template_id=template_id,
-                name=name,
-                tags=tag_list,
-                variables=variables,
-                preview_target=preview_target,
-                dir_path=entry,
-            )
-        )
+        entries.append(_entry_from_metadata(template_id, entry, metadata))
     return entries
 
 
@@ -152,18 +180,7 @@ def load_template_entry(template_id: str) -> TemplateEntry:
     if not metadata_path.exists():
         raise FileNotFoundError(template_id)
     metadata = _load_metadata(metadata_path)
-    name = str(metadata.get('name') or template_id)
-    tags = [str(tag) for tag in metadata.get('tags') or []]
-    variables = [dict(item) for item in (metadata.get('variables') or []) if isinstance(item, Mapping)]
-    preview_target = dict(metadata.get('preview_target') or {})
-    return TemplateEntry(
-        template_id=template_id,
-        name=name,
-        tags=tags,
-        variables=variables,
-        preview_target=preview_target,
-        dir_path=dir_path,
-    )
+    return _entry_from_metadata(template_id, dir_path, metadata)
 
 
 def save_template_entry(
@@ -175,6 +192,11 @@ def save_template_entry(
     template: Mapping[str, Any],
     sample_data: Mapping[str, Any],
     preview_png: bytes | None,
+    description: str = '',
+    usage_context: str = '',
+    favorite: bool = False,
+    archived: bool = False,
+    print_defaults: Mapping[str, Any] | None = None,
 ) -> TemplateEntry:
     root = ensure_templates_dir()
     existing_ids = {entry.name for entry in root.iterdir() if entry.is_dir()}
@@ -184,14 +206,22 @@ def save_template_entry(
     dir_path = _template_dir(root, template_id)
     dir_path.mkdir(parents=True, exist_ok=True)
 
+    now = datetime.now(timezone.utc).isoformat()
     metadata = {
         'id': template_id,
         'name': name,
         'tags': tags,
         'variables': variables,
         'preview_target': preview_target,
+        'description': description,
+        'usage_context': usage_context,
+        'favorite': favorite,
+        'archived': archived,
+        'print_defaults': dict(print_defaults or {}),
+        'created_at': now,
+        'updated_at': now,
     }
-    (dir_path / _METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding='utf-8')
+    _write_metadata(dir_path / _METADATA_FILENAME, metadata)
     (dir_path / _TEMPLATE_FILENAME).write_text(json.dumps(template, indent=2, ensure_ascii=True), encoding='utf-8')
     (dir_path / _SAMPLE_DATA_FILENAME).write_text(json.dumps(sample_data, indent=2, ensure_ascii=True), encoding='utf-8')
     if preview_png is not None:
@@ -201,14 +231,7 @@ def save_template_entry(
         if preview_path.exists():
             preview_path.unlink()
 
-    return TemplateEntry(
-        template_id=template_id,
-        name=name,
-        tags=tags,
-        variables=variables,
-        preview_target=preview_target,
-        dir_path=dir_path,
-    )
+    return _entry_from_metadata(template_id, dir_path, metadata)
 
 
 def update_template_entry(
@@ -221,6 +244,11 @@ def update_template_entry(
     template: Mapping[str, Any],
     sample_data: Mapping[str, Any],
     preview_png: bytes | None,
+    description: str = '',
+    usage_context: str = '',
+    favorite: bool = False,
+    archived: bool = False,
+    print_defaults: Mapping[str, Any] | None = None,
 ) -> TemplateEntry:
     root = ensure_templates_dir()
     dir_path = _template_dir(root, template_id)
@@ -228,14 +256,23 @@ def update_template_entry(
         raise FileNotFoundError(template_id)
     dir_path.mkdir(parents=True, exist_ok=True)
 
+    previous = _load_metadata(dir_path / _METADATA_FILENAME)
+    now = datetime.now(timezone.utc).isoformat()
     metadata = {
         'id': template_id,
         'name': name,
         'tags': tags,
         'variables': variables,
         'preview_target': preview_target,
+        'description': description,
+        'usage_context': usage_context,
+        'favorite': favorite,
+        'archived': archived,
+        'print_defaults': dict(print_defaults or {}),
+        'created_at': previous.get('created_at') or now,
+        'updated_at': now,
     }
-    (dir_path / _METADATA_FILENAME).write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding='utf-8')
+    _write_metadata(dir_path / _METADATA_FILENAME, metadata)
     (dir_path / _TEMPLATE_FILENAME).write_text(json.dumps(template, indent=2, ensure_ascii=True), encoding='utf-8')
     (dir_path / _SAMPLE_DATA_FILENAME).write_text(json.dumps(sample_data, indent=2, ensure_ascii=True), encoding='utf-8')
     if preview_png is not None:
@@ -245,11 +282,13 @@ def update_template_entry(
         if preview_path.exists():
             preview_path.unlink()
 
-    return TemplateEntry(
-        template_id=template_id,
-        name=name,
-        tags=tags,
-        variables=variables,
-        preview_target=preview_target,
-        dir_path=dir_path,
-    )
+    return _entry_from_metadata(template_id, dir_path, metadata)
+
+
+def patch_template_metadata(template_id: str, changes: Mapping[str, Any]) -> TemplateEntry:
+    entry = load_template_entry(template_id)
+    metadata = _load_metadata(entry.metadata_path)
+    metadata.update(changes)
+    metadata['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _write_metadata(entry.metadata_path, metadata)
+    return _entry_from_metadata(template_id, entry.dir_path, metadata)
