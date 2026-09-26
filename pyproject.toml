@@ -10,7 +10,7 @@ packages = [{ include = "zplgrid" }]
 python = ">=3.10"
 jsonschema = ">=4.26.0"
 fastapi = "^0.141.1"
-uvicorn = "^0.30.0"
+uvicorn = "^0.53.0"
 pillow = "^12.3.0"
 requests = "^2.34.2"
 segno = "^1.6.6"
