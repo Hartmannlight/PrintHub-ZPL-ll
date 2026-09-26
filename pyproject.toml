@@ -17,7 +17,7 @@ segno = "^1.6.6"
 pylibdmtx = "^0.1.10"
 pyyaml = "^6.0.3"
 python-dotenv = "^1.2.3"
-zeroconf = "^0.147.0"
+zeroconf = "^0.151.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
