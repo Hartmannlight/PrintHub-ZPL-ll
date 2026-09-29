@@ -20,7 +20,7 @@ python-dotenv = "^1.2.3"
 zeroconf = "^0.151.3"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.4.2"
+pytest = "^9.1.1"
 httpx = "^0.28.1"
 
 [tool.pytest.ini_options]
