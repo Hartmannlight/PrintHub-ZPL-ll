@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import base64
 import io
 import os
@@ -8,6 +8,8 @@ from typing import Any, Mapping, Optional
 
 from .exceptions import CompilationError
 from .layout import compute_layout
+from .rotation import TransformedZplBuilder
+from .cable_flag import prepare_cable_flag
 from .measure import TextMeasurer, ZplMeasuredTextMeasurer
 from .model import DataMatrixElement, ImageBackground, ImageElement, LeafNode, LabelTarget, LineElement, QrElement, Template, TextElement
 from .render import RenderOptions, render_text
@@ -58,6 +60,28 @@ class Compiler:
         ).zpl
 
     def compile_with_diagnostics(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> CompilationResult:
+        labels = self.compile_labels(template, target=target, variables=variables, debug=debug)
+        return CompilationResult(''.join(label.zpl for label in labels), tuple(item for label in labels for item in label.diagnostics))
+
+    def compile_labels(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> tuple[CompilationResult, ...]:
+        if not template.labels:
+            return (self._compile_label(template, target=target, variables=variables, debug=debug),)
+        results = []
+        for index, label in enumerate(template.labels):
+            resolved = dict(variables)
+            for destination, source in label.bindings.items():
+                if source not in variables and template.defaults.render_defaults.get('missing_variables', 'error') != 'empty':
+                    raise CompilationError(f'Missing input field for label {index + 1}: {source}')
+                resolved[destination] = variables.get(source, '')
+            single = replace(template, layout=label.layout or template.layout, labels=())
+            result = self._compile_label(single, target=target, variables=resolved, debug=debug)
+            if len(template.labels) > 1:
+                title = label.name or f'Label {index + 1}'
+                result = replace(result, diagnostics=tuple(replace(item, message=f'{title}: {item.message}') for item in result.diagnostics))
+            results.append(result)
+        return tuple(results)
+
+    def _compile_label(self, template: Template, *, target: LabelTarget, variables: Mapping[str, Any], debug: bool = False) -> CompilationResult:
         width_dots = mm_to_dots(target.width_mm, target.dpi)
         height_dots = mm_to_dots(target.height_mm, target.dpi)
         origin_x = mm_to_dots(target.origin_x_mm, target.dpi)
@@ -69,7 +93,7 @@ class Compiler:
         debug_padding_guides = bool(render_defaults.get('debug_padding_guides', False))
         debug_gutter_guides = bool(render_defaults.get('debug_gutter_guides', False))
 
-        layout = compute_layout(template.layout, width_dots=width_dots, height_dots=height_dots, dpi=target.dpi)
+        layout = compute_layout(prepare_cable_flag(template, target), width_dots=width_dots, height_dots=height_dots, dpi=target.dpi)
 
         z = ZplBuilder(options=zpl_opts)
         diagnostics: list[CompilationDiagnostic] = []
@@ -77,7 +101,7 @@ class Compiler:
 
         for background in layout.backgrounds:
             self._emit_image(
-                z,
+                TransformedZplBuilder(z, background.transform),
                 element=background.background,
                 rect=background.rect,
                 variables=variables,
@@ -89,14 +113,15 @@ class Compiler:
             if debug or leaf.node.debug_border:
                 self._emit_border(z, leaf.rect)
             if debug_padding_guides:
-                self._emit_padding_guide(z, leaf.content_rect)
+                self._emit_padding_guide(z, leaf.transform.bounds(leaf.content_rect))
 
+            local_z = TransformedZplBuilder(z, leaf.transform)
             element = leaf.node.elements[0]
             element_box = self._compute_element_box(element=element, rect=leaf.content_rect, dpi=target.dpi)
 
             if isinstance(element, TextElement):
                 diagnostics.extend(self._emit_text(
-                    z,
+                    local_z,
                     element=element,
                     rect=element_box,
                     variables=variables,
@@ -105,13 +130,13 @@ class Compiler:
                     leaf_alias=leaf.node.alias,
                 ))
             elif isinstance(element, QrElement):
-                self._emit_qr(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+                self._emit_qr(local_z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
             elif isinstance(element, DataMatrixElement):
-                self._emit_datamatrix(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+                self._emit_datamatrix(local_z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
             elif isinstance(element, ImageElement):
-                self._emit_image(z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
+                self._emit_image(local_z, element=element, rect=element_box, variables=variables, render_opts=render_opts, dpi=target.dpi)
             elif isinstance(element, LineElement):
-                self._emit_line(z, element=element, rect=element_box, dpi=target.dpi)
+                self._emit_line(local_z, element=element, rect=element_box, dpi=target.dpi)
             else:
                 raise CompilationError(f'unsupported element type: {element.type!r}')
 
@@ -335,7 +360,8 @@ class Compiler:
             # the printer align one already-wrapped line when it is known to
             # fit. A one-line ^FB ending in \& cannot perform a second
             # multi-line wrap or overwrite a later line.
-            use_printer_alignment = align_h in ('center', 'right') and line_metrics.width_dots <= rect.w
+            rotated = getattr(z, 'transform', None) is not None and z.transform.orientation != 'N'
+            use_printer_alignment = (rotated or align_h in ('center', 'right')) and line_metrics.width_dots <= rect.w
             box_x = rect.x
             if not use_printer_alignment:
                 if align_h == 'center':
@@ -344,13 +370,13 @@ class Compiler:
                     box_x += max(0, rect.w - line_metrics.width_dots)
 
             z.field_origin(box_x, box_y + line_index * (font_h + line_spacing))
-            z.font_a0(height=font_h, width=font_w)
+            z.font_a0(height=font_h, width=font_w, box_width=max(1, rect.w) if use_printer_alignment else line_metrics.width_dots)
             if use_printer_alignment:
                 z.field_block(
                     width=max(1, rect.w),
                     max_lines=1,
                     line_spacing=0,
-                    justification='C' if align_h == 'center' else 'R',
+                    justification={'left': 'L', 'center': 'C', 'right': 'R'}[align_h],
                     hanging_indent=0,
                 )
             field_text = f'{line}\\&' if use_printer_alignment else line
@@ -497,7 +523,7 @@ class Compiler:
             fd = f'{ecc}M,{cm}{data}'
 
         needs_hex, encoded = encode_field_data(fd, hex_indicator='_', encoding='utf-8')
-        z.field_origin(x, y)
+        z.field_origin(x, y, width=size_w, height=size_h)
         z.qr_code(model=model, magnification=int(mag))
         if needs_hex:
             z.field_hex('_')
@@ -565,7 +591,7 @@ class Compiler:
         x, y = self._align_in_rect(rect=inner, size_w=size_w, size_h=size_h, align_h=align_h, align_v=align_v)
 
         needs_hex, encoded = encode_field_data(data, hex_indicator=escape_char, encoding='utf-8')
-        z.field_origin(x, y)
+        z.field_origin(x, y, width=size_w, height=size_h)
         z.datamatrix(
             module_size=module,
             quality=quality,
@@ -704,7 +730,7 @@ class Compiler:
             dither='none',
         )
         z.field_origin(x, y)
-        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data_hex)
+        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data_hex, width=img.width)
         z.field_separator()
 
     def _emit_datamatrix_image(
@@ -767,7 +793,7 @@ class Compiler:
             dither='none',
         )
         z.field_origin(x, y)
-        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data_hex)
+        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data_hex, width=img.width)
         z.field_separator()
 
     def _emit_image(
@@ -833,7 +859,7 @@ class Compiler:
             dither=dither,
         )
         z.field_origin(x, y)
-        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data)
+        z.graphic_field(total_bytes=total_bytes, bytes_per_row=bytes_per_row, data=data, width=target_img.width)
         z.field_separator()
 
     def _load_image_bytes(self, *, kind: str, data: str) -> bytes:

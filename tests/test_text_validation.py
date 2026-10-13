@@ -25,6 +25,7 @@ def _template(element: dict) -> dict:
         {"type": "text", "text": "truncate", "fit": "truncate", "wrap": "char"},
         {"type": "text", "text": "shrink", "fit": "shrink_to_fit", "wrap": "word"},
         {"type": "text", "text": "shrink", "fit": "shrink_to_fit", "wrap": "char"},
+        {"type": "text", "text": "manual lines", "fit": "shrink_to_fit", "wrap": "none"},
     ],
 )
 def test_valid_text_fit_wrap_combinations_are_accepted(element: dict) -> None:
@@ -38,7 +39,6 @@ def test_valid_text_fit_wrap_combinations_are_accepted(element: dict) -> None:
         {"type": "text", "text": "bad", "fit": "overflow", "wrap": "char"},
         {"type": "text", "text": "bad", "fit": "wrap", "wrap": "none"},
         {"type": "text", "text": "bad", "fit": "truncate", "wrap": "none"},
-        {"type": "text", "text": "bad", "fit": "shrink_to_fit", "wrap": "none"},
         {"type": "text", "text": "bad", "fit": "unknown", "wrap": "word"},
         {"type": "text", "text": "bad", "max_lines": 0},
         {"type": "text", "text": "bad", "max_lines": -1},

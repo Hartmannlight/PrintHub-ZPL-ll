@@ -33,7 +33,7 @@ class ZplBuilder:
     def end_label(self) -> None:
         self._lines.append('^XZ')
 
-    def field_origin(self, x: int, y: int) -> None:
+    def field_origin(self, x: int, y: int, *, width: int = 0, height: int = 0) -> None:
         self._lines.append(f'^FO{x},{y}')
 
     def label_home_offset(self, *, dx: int = 0, dy: int = 0) -> None:
@@ -44,8 +44,8 @@ class ZplBuilder:
     def field_separator(self) -> None:
         self._lines.append('^FS')
 
-    def font_a0(self, *, height: int, width: int) -> None:
-        self._lines.append(f'^A0N,{height},{width}')
+    def font_a0(self, *, height: int, width: int, orientation: str = 'N', box_width: int = 0) -> None:
+        self._lines.append(f'^A0{orientation},{height},{width}')
 
     def field_block(self, *, width: int, max_lines: int, line_spacing: int, justification: str, hanging_indent: int = 0) -> None:
         self._lines.append(f'^FB{width},{max_lines},{line_spacing},{justification},{hanging_indent}')
@@ -59,17 +59,17 @@ class ZplBuilder:
     def field_data(self, data: str) -> None:
         self._lines.append(f'^FD{data}')
 
-    def qr_code(self, *, model: int, magnification: int) -> None:
-        self._lines.append(f'^BQN,{model},{magnification}')
+    def qr_code(self, *, model: int, magnification: int, orientation: str = 'N') -> None:
+        self._lines.append(f'^BQ{orientation},{model},{magnification}')
 
-    def datamatrix(self, *, module_size: int, quality: int, columns: int, rows: int, format_id: int, escape_char: str) -> None:
+    def datamatrix(self, *, module_size: int, quality: int, columns: int, rows: int, format_id: int, escape_char: str, orientation: str = 'N') -> None:
         esc = escape_char if escape_char else '_'
-        self._lines.append(f'^BXN,{module_size},{quality},{columns},{rows},{format_id},{esc}')
+        self._lines.append(f'^BX{orientation},{module_size},{quality},{columns},{rows},{format_id},{esc}')
 
     def graphic_box(self, *, width: int, height: int, thickness: int, color: str = 'B', rounding: int = 0) -> None:
         self._lines.append(f'^GB{width},{height},{thickness},{color},{rounding}')
 
-    def graphic_field(self, *, total_bytes: int, bytes_per_row: int, data: str) -> None:
+    def graphic_field(self, *, total_bytes: int, bytes_per_row: int, data: str, width: int | None = None) -> None:
         self._lines.append(f'^GFA,{total_bytes},{total_bytes},{bytes_per_row},{data}')
 
     def build(self) -> str:

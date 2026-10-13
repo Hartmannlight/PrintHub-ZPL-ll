@@ -55,6 +55,13 @@ def collect_template_placeholders(template) -> set[str]:
             for child in node.children:
                 check_node(child)
 
+    if template.labels:
+        all_used = set()
+        for label in template.labels:
+            used.clear()
+            check_node(label.layout or template.layout)
+            all_used.update(label.bindings.get(name, name) for name in used)
+        return all_used
     check_node(template.layout)
     return used
 
