@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.local/zplgrid/template/v1",
   "title": "zplgrid template v1",
@@ -78,20 +78,20 @@
                   "fit"
                 ],
                 "properties": {
-                "fit": {
+                  "fit": {
                     "enum": [
                       "overflow"
                     ]
-                }
+                  }
                 }
               },
               "then": {
                 "properties": {
-                "wrap": {
+                  "wrap": {
                     "enum": [
                       "none"
                     ]
-                }
+                  }
                 },
                 "required": [
                   "wrap"
@@ -107,8 +107,7 @@
                   "fit": {
                     "enum": [
                       "wrap",
-                      "truncate",
-                      "shrink_to_fit"
+                      "truncate"
                     ]
                   }
                 }
@@ -133,20 +132,21 @@
                   "wrap"
                 ],
                 "properties": {
-                "wrap": {
+                  "wrap": {
                     "enum": [
                       "none"
                     ]
-                }
+                  }
                 }
               },
               "then": {
                 "properties": {
-                "fit": {
+                  "fit": {
                     "enum": [
-                      "overflow"
+                      "overflow",
+                      "shrink_to_fit"
                     ]
-                }
+                  }
                 },
                 "required": [
                   "fit"
@@ -266,6 +266,14 @@
     },
     "extensions": {
       "type": "object"
+    },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 25,
+      "items": {
+        "$ref": "#/$defs/label_variant"
+      }
     }
   },
   "$defs": {
@@ -317,6 +325,17 @@
             "split"
           ]
         },
+        "rotation_deg": {
+          "type": "integer",
+          "enum": [
+            0,
+            90,
+            180,
+            -90,
+            270
+          ],
+          "description": "Clockwise content rotation inside the allocated area."
+        },
         "alias": {
           "type": "string",
           "minLength": 1
@@ -367,6 +386,17 @@
           "enum": [
             "leaf"
           ]
+        },
+        "rotation_deg": {
+          "type": "integer",
+          "enum": [
+            0,
+            90,
+            180,
+            -90,
+            270
+          ],
+          "description": "Clockwise content rotation inside the allocated area."
         },
         "alias": {
           "type": "string",
@@ -530,20 +560,20 @@
               "fit"
             ],
             "properties": {
-                "fit": {
-                  "enum": [
-                    "overflow"
-                  ]
-                }
+              "fit": {
+                "enum": [
+                  "overflow"
+                ]
+              }
             }
           },
           "then": {
             "properties": {
-                "wrap": {
-                  "enum": [
-                    "none"
-                  ]
-                }
+              "wrap": {
+                "enum": [
+                  "none"
+                ]
+              }
             },
             "required": [
               "wrap"
@@ -559,8 +589,7 @@
               "fit": {
                 "enum": [
                   "wrap",
-                  "truncate",
-                  "shrink_to_fit"
+                  "truncate"
                 ]
               }
             }
@@ -585,20 +614,21 @@
               "wrap"
             ],
             "properties": {
-                "wrap": {
-                  "enum": [
-                    "none"
-                  ]
-                }
+              "wrap": {
+                "enum": [
+                  "none"
+                ]
+              }
             }
           },
           "then": {
             "properties": {
-                "fit": {
-                  "enum": [
-                    "overflow"
-                  ]
-                }
+              "fit": {
+                "enum": [
+                  "overflow",
+                  "shrink_to_fit"
+                ]
+              }
             },
             "required": [
               "fit"
@@ -732,11 +762,11 @@
               "input_mode"
             ],
             "properties": {
-                "input_mode": {
-                    "enum": [
-                      "M"
-                    ]
-                }
+              "input_mode": {
+                "enum": [
+                  "M"
+                ]
+              }
             }
           },
           "then": {
@@ -753,11 +783,11 @@
           },
           "then": {
             "properties": {
-                "input_mode": {
-                    "enum": [
-                      "M"
-                    ]
-                }
+              "input_mode": {
+                "enum": [
+                  "M"
+                ]
+              }
             },
             "required": [
               "input_mode"
@@ -1060,6 +1090,29 @@
           "enum": [
             "image"
           ]
+        }
+      }
+    },
+    "label_variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "layout": {
+          "$ref": "#/$defs/node"
+        },
+        "bindings": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
         }
       }
     }

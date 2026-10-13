@@ -160,6 +160,7 @@ class Node:
     alias: Optional[str] = None
     background: Optional[ImageBackground] = None
     extensions: dict[str, Any] = field(default_factory=dict)
+    rotation_deg: int = 0
 
 
 @dataclass(frozen=True)
@@ -179,12 +180,20 @@ class LeafNode(Node):
 
 
 @dataclass(frozen=True)
+class LabelVariant:
+    name: str = ''
+    layout: Optional[Node] = None
+    bindings: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Template:
     schema_version: int
     name: str
     defaults: TemplateDefaults
     layout: Node
     extensions: dict[str, Any] = field(default_factory=dict)
+    labels: tuple[LabelVariant, ...] = field(default_factory=tuple)
 
     def compile(self, target: LabelTarget, variables: Optional[Mapping[str, Any]] = None, *, debug: bool = False) -> str:
         from .compiler import Compiler

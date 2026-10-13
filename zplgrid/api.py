@@ -349,21 +349,29 @@ async def idempotency_conflict_handler(_request, exc: IdempotencyConflict):
 def _assert_variables_present(template: Template, variables: Mapping[str, Any]) -> None:
     options = RenderOptions(missing_variables="error")
 
-    def check_node(node) -> None:
+    def check_node(node, values) -> None:
         if isinstance(node, LeafNode):
             element = node.elements[0]
             if isinstance(element, TextElement):
-                render_text(element.text, variables, options=options)
+                render_text(element.text, values, options=options)
             elif isinstance(element, QrElement):
-                render_text(element.data, variables, options=options)
+                render_text(element.data, values, options=options)
             elif isinstance(element, DataMatrixElement):
-                render_text(element.data, variables, options=options)
+                render_text(element.data, values, options=options)
             return
         if isinstance(node, SplitNode):
             for child in node.children:
-                check_node(child)
+                check_node(child, values)
 
-    check_node(template.layout)
+    if template.labels:
+        for label in template.labels:
+            values = dict(variables)
+            for destination, source in label.bindings.items():
+                render_text('{' + source + '}', variables, options=options)
+                values[destination] = variables[source]
+            check_node(label.layout or template.layout, values)
+    else:
+        check_node(template.layout, variables)
 
 
 def _labelary_api_enabled() -> bool:
@@ -1103,9 +1111,11 @@ def _prepare_template_artifact_set(
         job["resolved_variables"] = resolved
         job["resolved_template"] = template_json
         save_stored_print_job(job)
-    zpl = template.compile(
-        target=LabelTarget(**target.model_dump()), variables=resolved, debug=False
-    )
+    compiled_labels = Compiler().compile_labels(template, target=LabelTarget(**target.model_dump()), variables=resolved, debug=False)
+    zpl = ''.join(label.zpl for label in compiled_labels)
+    if template.labels:
+        job['page_count'] = len(compiled_labels)
+        save_stored_print_job(job)
     accepted = set(printer.get("accepted_mime_types") or ["application/zpl"])
     description = f"Template: {template_json.get('name', 'Untitled')}"
     output_mode = str(job.get("output_mode") or "auto")
@@ -1121,43 +1131,47 @@ def _prepare_template_artifact_set(
         raise ValueError("The selected printer does not accept native ZPL")
     if use_raster and "application/vnd.printhub.raster-page+json" not in accepted:
         raise ValueError("The selected printer does not accept the PrintHub raster format")
+    artifacts = []
     if use_native:
         artifact = {
             "mime_type": "application/zpl",
             "data_base64": base64.b64encode(zpl.encode("utf-8")).decode("ascii"),
             "description": description,
         }
+        artifacts.append(artifact)
     elif use_raster:
         dpmm, width_in, height_in = _target_to_labelary_args(target)
-        png = render_labelary_png_bytes(
-            zpl,
-            dpmm=dpmm,
-            label_width_in=width_in,
-            label_height_in=height_in,
-            index=0,
-            timeout_s=30,
-        )
-        raster_target = target_for_printer(printer)
-        prepared = prepare_raster_page(
-            RasterPageSource(
-                data=png,
-                mime_type="image/png",
-                width_mm=target.width_mm,
-                height_mm=target.height_mm,
-            ),
-            target=raster_target,
-            scaling=ScalingPolicy.HOLD,
-            content_optimize=ContentOptimize.TEXT,
-            dither=DitherMode.NONE,
-            mismatch_tolerance_mm=0.01,
-        )
-        artifact = {
-            "mime_type": "application/vnd.printhub.raster-page+json",
-            "data_base64": base64.b64encode(
-                encode_prepared_raster(prepared, copies=1)
-            ).decode("ascii"),
-            "description": description,
-        }
+        for label in compiled_labels:
+            png = render_labelary_png_bytes(
+                label.zpl,
+                dpmm=dpmm,
+                label_width_in=width_in,
+                label_height_in=height_in,
+                index=0,
+                timeout_s=30,
+            )
+            raster_target = target_for_printer(printer)
+            prepared = prepare_raster_page(
+                RasterPageSource(
+                    data=png,
+                    mime_type="image/png",
+                    width_mm=target.width_mm,
+                    height_mm=target.height_mm,
+                ),
+                target=raster_target,
+                scaling=ScalingPolicy.HOLD,
+                content_optimize=ContentOptimize.TEXT,
+                dither=DitherMode.NONE,
+                mismatch_tolerance_mm=0.01,
+            )
+            artifact = {
+                "mime_type": "application/vnd.printhub.raster-page+json",
+                "data_base64": base64.b64encode(
+                    encode_prepared_raster(prepared, copies=1)
+                ).decode("ascii"),
+                "description": description,
+            }
+            artifacts.append(artifact)
     else:
         raise ValueError("Printer accepts neither native ZPL nor the PrintHub raster format")
     artifact_set = {
@@ -1165,7 +1179,7 @@ def _prepare_template_artifact_set(
         "copies": 1,
         "media_revision": (printer.get("media") or {}).get("revision"),
         "description": description,
-        "artifacts": [artifact],
+        "artifacts": artifacts,
     }
     save_job_artifacts(str(job["id"]), artifact_set)
     return artifact_set

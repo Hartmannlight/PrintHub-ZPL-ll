@@ -16,6 +16,9 @@ def validate_template_dict(raw: Mapping[str, Any]) -> list[TemplateIssue]:
 
     seen_aliases: set[str] = set()
     _validate_node(raw['layout'], issues=issues, path='$.layout', seen_aliases=seen_aliases)
+    for index, label in enumerate(raw.get('labels') or []):
+        if 'layout' in label:
+            _validate_node(label['layout'], issues=issues, path=f'$.labels[{index}].layout', seen_aliases=set())
     return issues
 
 

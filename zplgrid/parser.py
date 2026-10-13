@@ -41,7 +41,11 @@ def _parse_template_dict(raw: Mapping[str, Any]) -> Template:
     defaults = _parse_defaults(raw.get('defaults') or {})
     layout = _parse_node(raw['layout'], defaults=defaults, path='r')
     extensions = dict(raw.get('extensions') or {})
-    return Template(schema_version=schema_version, name=name, defaults=defaults, layout=layout, extensions=extensions)
+    from .model import LabelVariant
+    labels = tuple(LabelVariant(name=str(item.get('name', '')), bindings=dict(item.get('bindings') or {}),
+                                layout=_parse_node(item['layout'], defaults=defaults, path=f'label/{index}') if 'layout' in item else None)
+                   for index, item in enumerate(raw.get('labels') or []))
+    return Template(schema_version=schema_version, name=name, defaults=defaults, layout=layout, extensions=extensions, labels=labels)
 
 
 def _parse_defaults(raw: Mapping[str, Any]) -> TemplateDefaults:
@@ -78,6 +82,7 @@ def _parse_node(raw: Mapping[str, Any], *, defaults: TemplateDefaults, path: str
         child1 = _parse_node(children_raw[1], defaults=defaults, path=f'{path}/1')
         return SplitNode(
             kind='split',
+            rotation_deg=int(raw.get('rotation_deg', 0)),
             alias=str(alias) if alias is not None else None,
             direction=str(raw['direction']),
             ratio=float(raw['ratio']),
@@ -95,6 +100,7 @@ def _parse_node(raw: Mapping[str, Any], *, defaults: TemplateDefaults, path: str
         elements = tuple(_parse_element(e, defaults=defaults) for e in elements_raw)
         return LeafNode(
             kind='leaf',
+            rotation_deg=int(raw.get('rotation_deg', 0)),
             alias=str(alias) if alias is not None else None,
             padding_mm=padding_mm,
             debug_border=bool(raw.get('debug_border', False)),

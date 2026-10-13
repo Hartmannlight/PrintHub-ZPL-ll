@@ -6,6 +6,7 @@ from typing import Iterable, Mapping
 from .exceptions import LayoutError
 from .model import ImageBackground, LeafNode, Node, Rect, SplitNode
 from .units import mm_to_dots
+from .rotation import Transform
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,7 @@ class NodeBackgroundLayout:
     node_id: str
     background: ImageBackground
     rect: Rect
+    transform: Transform = Transform()
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class LeafLayout:
     node: LeafNode
     rect: Rect
     content_rect: Rect
+    transform: Transform = Transform()
 
 
 @dataclass(frozen=True)
@@ -88,10 +91,12 @@ def _walk(
     dividers: list[SplitDividerLayout],
     gutters: list[GutterGuideLayout],
     alias_to_id: dict[str, str],
+    transform: Transform = Transform(),
 ) -> None:
-    node_rects[node_id] = rect
+    transform, rect = transform.child(rect, node.rotation_deg)
+    node_rects[node_id] = transform.bounds(rect)
     if node.background is not None:
-        backgrounds.append(NodeBackgroundLayout(node_id=node_id, background=node.background, rect=rect))
+        backgrounds.append(NodeBackgroundLayout(node_id=node_id, background=node.background, rect=rect, transform=transform))
     if node.alias:
         alias_to_id[node.alias] = node_id
 
@@ -102,7 +107,7 @@ def _walk(
         right = mm_to_dots(pad.right, dpi)
         bottom = mm_to_dots(pad.bottom, dpi)
         content = rect.inset(left=left, top=top, right=right, bottom=bottom)
-        leaves.append(LeafLayout(node_id=node_id, node=node, rect=rect, content_rect=content))
+        leaves.append(LeafLayout(node_id=node_id, node=node, rect=transform.bounds(rect), content_rect=content, transform=transform))
         return
 
     if not isinstance(node, SplitNode):
@@ -122,13 +127,13 @@ def _walk(
         child0 = Rect(x=rect.x, y=rect.y, w=child0_w, h=rect.h)
         child1 = Rect(x=rect.x + child0_w + gutter, y=rect.y, w=child1_w, h=rect.h)
         if gutter > 0:
-            gutters.append(GutterGuideLayout(rect=Rect(x=rect.x + child0_w, y=rect.y, w=gutter, h=rect.h), direction='v'))
+            gutters.append(GutterGuideLayout(rect=transform.bounds(Rect(x=rect.x + child0_w, y=rect.y, w=gutter, h=rect.h)), direction='v'))
         if node.divider.visible:
             thickness = mm_to_dots(node.divider.thickness_mm, dpi)
             line_x = rect.x + child0_w + (gutter - thickness) // 2
-            dividers.append(SplitDividerLayout(rect=Rect(x=line_x, y=rect.y, w=thickness, h=rect.h), thickness=thickness))
-        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
-        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+            dividers.append(SplitDividerLayout(rect=transform.bounds(Rect(x=line_x, y=rect.y, w=thickness, h=rect.h)), thickness=thickness))
+        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id, transform=transform)
+        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id, transform=transform)
         return
 
     if node.direction == 'h':
@@ -141,13 +146,13 @@ def _walk(
         child0 = Rect(x=rect.x, y=rect.y, w=rect.w, h=child0_h)
         child1 = Rect(x=rect.x, y=rect.y + child0_h + gutter, w=rect.w, h=child1_h)
         if gutter > 0:
-            gutters.append(GutterGuideLayout(rect=Rect(x=rect.x, y=rect.y + child0_h, w=rect.w, h=gutter), direction='h'))
+            gutters.append(GutterGuideLayout(rect=transform.bounds(Rect(x=rect.x, y=rect.y + child0_h, w=rect.w, h=gutter)), direction='h'))
         if node.divider.visible:
             thickness = mm_to_dots(node.divider.thickness_mm, dpi)
             line_y = rect.y + child0_h + (gutter - thickness) // 2
-            dividers.append(SplitDividerLayout(rect=Rect(x=rect.x, y=line_y, w=rect.w, h=thickness), thickness=thickness))
-        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
-        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id)
+            dividers.append(SplitDividerLayout(rect=transform.bounds(Rect(x=rect.x, y=line_y, w=rect.w, h=thickness)), thickness=thickness))
+        _walk(node.children[0], node_id=f'{node_id}/0', rect=child0, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id, transform=transform)
+        _walk(node.children[1], node_id=f'{node_id}/1', rect=child1, dpi=dpi, node_rects=node_rects, backgrounds=backgrounds, leaves=leaves, dividers=dividers, gutters=gutters, alias_to_id=alias_to_id, transform=transform)
         return
 
     raise LayoutError(f'invalid split direction at {node_id}: {node.direction!r}')
